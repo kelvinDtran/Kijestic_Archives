@@ -1,0 +1,116 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-inter: 'Inter', system-ui, sans-serif;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    /* Force dark mode */
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-aegis-bg text-aegis-text antialiased;
+    font-family: var(--font-inter);
+  }
+
+  /* Prevent text selection on UI chrome (not on content) */
+  .no-select {
+    user-select: none;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-aegis-border rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-aegis-border-hover;
+  }
+
+  /* Focus styles — accessible and security-appropriate */
+  :focus-visible {
+    @apply outline-none ring-2 ring-aegis-primary ring-offset-2 ring-offset-aegis-bg;
+  }
+
+  /* Secret values — monospace, protected from selection-based leaks */
+  .secret-value {
+    @apply font-mono tracking-wider;
+    /* Prevent text from appearing in browser's Find-in-page results where possible */
+    user-select: text;
+    /* Prevent screenshots on mobile (CSS approach — not a security guarantee) */
+    -webkit-user-select: text;
+  }
+
+  /* Blur secret fields until revealed */
+  .secret-blurred {
+    filter: blur(6px);
+    cursor: pointer;
+    transition: filter 0.15s ease;
+  }
+
+  .secret-blurred:hover {
+    filter: blur(4px);
+  }
+
+  .secret-revealed {
+    filter: none;
+  }
+}
+
+@layer components {
+  .aegis-card {
+    @apply bg-aegis-surface border border-aegis-border rounded-aegis-lg p-4;
+  }
+
+  .aegis-input {
+    @apply w-full bg-aegis-elevated border border-aegis-border rounded-aegis text-aegis-text
+           placeholder:text-aegis-muted px-3 py-2 text-sm
+           focus:outline-none focus:ring-2 focus:ring-aegis-primary focus:border-transparent
+           transition-colors duration-150;
+  }
+
+  .aegis-btn-primary {
+    @apply bg-aegis-primary hover:bg-aegis-primary-hover text-white font-medium
+           px-4 py-2 rounded-aegis text-sm
+           focus:outline-none focus:ring-2 focus:ring-aegis-primary focus:ring-offset-2 focus:ring-offset-aegis-bg
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-colors duration-150;
+  }
+
+  .aegis-btn-ghost {
+    @apply text-aegis-subtle hover:text-aegis-text hover:bg-aegis-elevated
+           px-3 py-2 rounded-aegis text-sm
+           focus:outline-none focus:ring-2 focus:ring-aegis-primary
+           transition-colors duration-150;
+  }
+
+  .aegis-btn-danger {
+    @apply bg-aegis-danger hover:bg-aegis-danger-hover text-white font-medium
+           px-4 py-2 rounded-aegis text-sm
+           focus:outline-none focus:ring-2 focus:ring-aegis-danger
+           transition-colors duration-150;
+  }
+
+  /* High-risk warning badge */
+  .high-risk-badge {
+    @apply bg-aegis-highrisk-muted border border-aegis-highrisk text-aegis-highrisk
+           text-xs font-semibold px-2 py-0.5 rounded-full;
+  }
+}

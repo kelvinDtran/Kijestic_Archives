@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find 'C:\\\\Users\\\\Kelvin Tran\\\\Documents\\\\Kijestic_Archives\\\\aegisvault\\\\src' -type f -name *.ts -o -name *.tsx)"
+    ]
+  }
+}

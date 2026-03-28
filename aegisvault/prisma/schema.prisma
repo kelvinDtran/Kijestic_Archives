@@ -1,0 +1,283 @@
+// AegisVault — Prisma Schema
+// Database: PostgreSQL
+//
+// SECURITY DESIGN:
+// - All sensitive vault data is encrypted client-side BEFORE reaching the server.
+// - encryptedData fields contain ciphertext that the server cannot decrypt.
+// - The server stores: non-sensitive metadata + encrypted blobs + session state.
+// - KDF parameters (salt, etc.) are stored to enable client-side key derivation on any device.
+//   These are NOT secret — their purpose is to reproduce the derived key from the master password.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Users ─────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+
+  // bcrypt hash of ACCOUNT password (for authentication only — NOT the master password)
+  passwordHash  String
+
+  // ── KDF parameters for client-side master key derivation ──────────────────
+  // These allow any authenticated device to reproduce the vault encryption key.
+  // The salt is NOT secret — it's a uniqueness parameter for Argon2id.
+  kdfSalt       String   // hex-encoded 32 random bytes
+  kdfVersion    Int      @default(1)
+  kdfMemory     Int      @default(65536)  // 64 MB
+  kdfIterations Int      @default(3)
+  kdfParallelism Int     @default(4)
+
+  // ── MFA ───────────────────────────────────────────────────────────────────
+  totpEnabled   Boolean  @default(false)
+  // TOTP secret encrypted at rest with SERVER_ENCRYPTION_KEY env var
+  // This is a server-managed secret (not user-controlled)
+  totpSecret    String?
+  // bcrypt-hashed backup codes for TOTP recovery (one-time use)
+  backupCodes   Json?
+
+  // ── Vault preferences ─────────────────────────────────────────────────────
+  // Inactivity lock timeout in seconds (0 = never, but discouraged)
+  lockTimeout   Int      @default(300)
+
+  // ── Timestamps ────────────────────────────────────────────────────────────
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  lastLoginAt   DateTime?
+
+  // ── Relations ─────────────────────────────────────────────────────────────
+  sessions            Session[]
+  vaultItems          VaultItem[]
+  vaultFiles          VaultFile[]
+  webauthnCredentials WebAuthnCredential[]
+  auditLogs           AuditLog[]
+
+  @@index([email])
+}
+
+// ── WebAuthn Credentials ──────────────────────────────────────────────────────
+
+model WebAuthnCredential {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  credentialId String   @unique // base64url-encoded credential ID from authenticator
+  publicKey    Bytes             // COSE-encoded public key
+  counter      BigInt   @default(0)  // sign counter — replay attack prevention
+  deviceType   String            // "singleDevice" | "multiDevice"
+  backedUp     Boolean  @default(false)
+  transports   String[]          // ["usb","nfc","ble","internal","hybrid"]
+
+  // User-given label for this credential
+  name         String   @default("Security Key")
+
+  createdAt    DateTime @default(now())
+  lastUsedAt   DateTime?
+
+  @@index([userId])
+}
+
+// ── WebAuthn Challenges ───────────────────────────────────────────────────────
+// Temporary storage for in-flight WebAuthn registration/authentication challenges.
+// Challenges are single-use and expire after a short TTL.
+
+model WebAuthnChallenge {
+  id        String   @id @default(cuid())
+  // userId is null for pre-auth challenges (user not yet identified)
+  userId    String?
+  challenge String   @unique // base64url-encoded random challenge
+  // "registration" | "authentication"
+  type      String
+  expiresAt DateTime
+
+  @@index([userId])
+  @@index([challenge])
+  @@index([expiresAt])
+}
+
+// ── Sessions ──────────────────────────────────────────────────────────────────
+
+model Session {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // SHA-256 hash of the opaque refresh token (never store raw tokens)
+  refreshTokenHash String   @unique
+
+  // JTI of the most recently issued access token — used for revocation checks
+  accessTokenJti   String?
+
+  // Device fingerprint (anonymized for privacy)
+  userAgent        String?
+  // SHA-256 hash of client IP (not raw IP — protects user privacy)
+  ipHash           String?
+
+  expiresAt        DateTime
+  lastUsedAt       DateTime @default(now())
+  createdAt        DateTime @default(now())
+  isRevoked        Boolean  @default(false)
+
+  @@index([userId])
+  @@index([refreshTokenHash])
+  @@index([expiresAt])
+}
+
+// ── Vault Items ───────────────────────────────────────────────────────────────
+
+model VaultItem {
+  id       String   @id @default(cuid())
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // ── Non-sensitive metadata (safe to store plaintext for server-side filtering) ──
+  itemType   ItemType @default(OTHER)
+  isFavorite Boolean  @default(false)
+  isArchived Boolean  @default(false)
+  // High-risk flag: set by client for crypto seed phrases, private keys, etc.
+  // Triggers extra UI warnings and access friction. Server-side only used for filtering.
+  isHighRisk Boolean  @default(false)
+
+  // ── Encrypted item key ────────────────────────────────────────────────────
+  // A random 32-byte Data Encryption Key (DEK), encrypted with the user's
+  // Vault Encryption Key (VEK) using XChaCha20-Poly1305.
+  // Format: base64(nonce[24] || ciphertext[32] || tag[16])
+  // The server CANNOT decrypt this without the master password.
+  encryptedItemKey String
+
+  // ── Encrypted sensitive data ──────────────────────────────────────────────
+  // ALL sensitive fields in a single JSON blob, encrypted with the DEK above.
+  // Plaintext structure: { title, website, username, email, password,
+  //   customFields: [{key,value}], notes, tags, url, riskLevel, ... }
+  // Format: base64(nonce[24] || ciphertext || tag[16])
+  encryptedData String
+
+  // ── Timestamps ────────────────────────────────────────────────────────────
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  files VaultFile[]
+
+  @@index([userId])
+  @@index([userId, itemType])
+  @@index([userId, isFavorite])
+  @@index([userId, isArchived])
+  @@index([userId, isHighRisk])
+}
+
+enum ItemType {
+  PASSWORD
+  API_KEY
+  CRYPTO
+  NOTE
+  DOCUMENT
+  RECOVERY_CODE
+  IMAGE
+  OTHER
+}
+
+// ── Vault Files ───────────────────────────────────────────────────────────────
+
+model VaultFile {
+  id          String     @id @default(cuid())
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  vaultItemId String?
+  vaultItem   VaultItem? @relation(fields: [vaultItemId], references: [id], onDelete: SetNull)
+
+  // Random 32-byte file key encrypted with VEK (same scheme as item key)
+  encryptedFileKey String
+
+  // Encrypted file metadata: { originalName, mimeType, originalSize }
+  // Encrypting this prevents leaking filenames/types to storage provider
+  encryptedMetadata String
+
+  // Storage-layer path (UUID-based, reveals nothing sensitive)
+  storagePath String @unique
+
+  // Size of the encrypted blob (for quota management — reveals file size to server)
+  encryptedSize Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([vaultItemId])
+}
+
+// ── Audit Log ─────────────────────────────────────────────────────────────────
+// Records security-relevant events WITHOUT any sensitive data.
+// CRITICAL: secret values, decrypted content, and master passwords MUST NEVER
+// appear in this table. Only structural/behavioral metadata is logged.
+
+model AuditLog {
+  id       String     @id @default(cuid())
+  userId   String?    // null for unauthenticated events (e.g., failed login with unknown email)
+  user     User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  event    AuditEvent
+
+  // Anonymized context — no sensitive data permitted
+  ipHash   String?    // SHA-256(IP)
+  userAgent String?
+  // Safe non-sensitive metadata only (e.g., {itemType:"PASSWORD"}, {action:"login"})
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([event])
+  @@index([createdAt])
+}
+
+enum AuditEvent {
+  AUTH_REGISTER
+  AUTH_LOGIN_SUCCESS
+  AUTH_LOGIN_FAILED
+  AUTH_LOGOUT
+  AUTH_ALL_SESSIONS_REVOKED
+  AUTH_SESSION_REVOKED
+  AUTH_PASSWORD_CHANGED
+  AUTH_MFA_ENABLED
+  AUTH_MFA_DISABLED
+  AUTH_MFA_CHALLENGE_SUCCESS
+  AUTH_MFA_CHALLENGE_FAILED
+  AUTH_WEBAUTHN_REGISTERED
+  AUTH_WEBAUTHN_REMOVED
+  AUTH_WEBAUTHN_CHALLENGE_SUCCESS
+  VAULT_UNLOCKED
+  VAULT_ITEM_CREATED
+  VAULT_ITEM_UPDATED
+  VAULT_ITEM_DELETED
+  VAULT_ITEM_ARCHIVED
+  VAULT_FILE_UPLOADED
+  VAULT_FILE_DELETED
+  VAULT_EXPORTED
+  VAULT_IMPORTED
+  ACCOUNT_SETTINGS_UPDATED
+  SUSPICIOUS_ACTIVITY
+}
+
+// ── Rate Limiting ─────────────────────────────────────────────────────────────
+
+model RateLimitEntry {
+  id      String   @id @default(cuid())
+  // Key includes action + hashed identifier to prevent enumeration
+  // e.g., "login:sha256(ip)", "register:sha256(ip)"
+  key     String   @unique
+  count   Int      @default(1)
+  resetAt DateTime
+
+  @@index([key])
+  @@index([resetAt])
+}
