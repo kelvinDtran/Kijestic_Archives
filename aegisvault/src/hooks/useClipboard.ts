@@ -14,7 +14,7 @@
  *     capturing the data — this is a known limitation of web clipboards.
  */
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 
 const DEFAULT_CLEAR_AFTER_MS = 30_000; // 30 seconds
 
@@ -112,6 +112,11 @@ export function useClipboard({
       setCopied(false);
     }
   }, [clearAfterMs, clearTimers, clearClipboard]);
+
+  // Clear timers on unmount to prevent state updates on an unmounted component
+  useEffect(() => {
+    return () => clearTimers();
+  }, [clearTimers]);
 
   return { copied, copyToClipboard, clearClipboard, timeUntilClear, error };
 }

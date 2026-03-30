@@ -21,7 +21,9 @@ import fs from 'fs/promises';
 let s3Client: import('@aws-sdk/client-s3').S3Client | null = null;
 
 const STORAGE_PROVIDER = process.env.STORAGE_PROVIDER ?? 'local';
-const LOCAL_PATH       = process.env.LOCAL_STORAGE_PATH ?? './uploads';
+const LOCAL_PATH       = path.resolve(
+  process.env.LOCAL_STORAGE_PATH ?? path.join(process.cwd(), 'uploads')
+);
 const S3_BUCKET        = process.env.S3_BUCKET_NAME ?? '';
 
 // ── Storage Path Generation ────────────────────────────────────────────────────
@@ -87,17 +89,32 @@ export async function deleteEncryptedFile(storagePath: string): Promise<void> {
 
 async function uploadToLocal(storagePath: string, data: Buffer | Uint8Array): Promise<void> {
   const fullPath = path.join(LOCAL_PATH, storagePath);
+  const resolvedFull = path.resolve(fullPath);
+  const resolvedBase = path.resolve(LOCAL_PATH);
+  if (!resolvedFull.startsWith(resolvedBase + path.sep) && resolvedFull !== resolvedBase) {
+    throw new Error('Invalid storage path: path traversal attempt detected');
+  }
   await fs.mkdir(path.dirname(fullPath), { recursive: true });
   await fs.writeFile(fullPath, data);
 }
 
 async function downloadFromLocal(storagePath: string): Promise<Buffer> {
   const fullPath = path.join(LOCAL_PATH, storagePath);
+  const resolvedFull = path.resolve(fullPath);
+  const resolvedBase = path.resolve(LOCAL_PATH);
+  if (!resolvedFull.startsWith(resolvedBase + path.sep) && resolvedFull !== resolvedBase) {
+    throw new Error('Invalid storage path: path traversal attempt detected');
+  }
   return fs.readFile(fullPath);
 }
 
 async function deleteFromLocal(storagePath: string): Promise<void> {
   const fullPath = path.join(LOCAL_PATH, storagePath);
+  const resolvedFull = path.resolve(fullPath);
+  const resolvedBase = path.resolve(LOCAL_PATH);
+  if (!resolvedFull.startsWith(resolvedBase + path.sep) && resolvedFull !== resolvedBase) {
+    throw new Error('Invalid storage path: path traversal attempt detected');
+  }
   await fs.unlink(fullPath).catch(() => {/* ignore missing file */});
 }
 

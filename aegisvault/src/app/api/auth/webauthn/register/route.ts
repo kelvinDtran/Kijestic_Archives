@@ -58,8 +58,11 @@ export async function POST(req: NextRequest) {
       transports: c.transports as AuthenticatorTransportFuture[],
     })),
     authenticatorSelection: {
-      residentKey:       'preferred',
-      userVerification:  'required',
+      residentKey:      'preferred',
+      userVerification: 'preferred',
+      // authenticatorAttachment intentionally omitted — allowing both platform
+      // (fingerprint / Face ID) and cross-platform (phone via hybrid QR transport)
+      // authenticators. The browser will display the QR-code option automatically.
     },
   });
 

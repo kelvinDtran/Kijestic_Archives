@@ -54,8 +54,8 @@ Master Password + KDF Salt
 | Key derivation | HKDF-SHA256 (`@noble/hashes`) |
 | Auth tokens | JWT via `jose` + opaque refresh tokens |
 | Account password | bcrypt via `bcryptjs` |
-| MFA | TOTP via `otpauth` |
-| WebAuthn | `@simplewebauthn` |
+| MFA | TOTP via `otpauth`, SMS via Twilio, Email OTP via Resend |
+| WebAuthn | `@simplewebauthn` (platform + cross-device QR) |
 | File storage | Local (dev) / S3-compatible (prod) |
 
 ---
@@ -152,6 +152,50 @@ src/
 - Audit log captures security events (never secret values)
 
 See [docs/SECURITY.md](docs/SECURITY.md) for the full security architecture.
+
+### Required Environment Variables
+
+All of these must be set — the app throws at startup if any are missing:
+
+```bash
+# Core (required)
+DATABASE_URL=postgresql://...
+JWT_ACCESS_SECRET=<64-byte random base64>
+SERVER_ENCRYPTION_KEY=<32-byte random base64>
+NEXT_PUBLIC_APP_URL=https://yourdomain.com
+
+# SMS MFA (required if SMS MFA is used)
+TWILIO_ACCOUNT_SID=ACxxxxxxxx
+TWILIO_AUTH_TOKEN=...
+TWILIO_PHONE_NUMBER=+1...
+
+# Email MFA (required if Email MFA is used)
+RESEND_API_KEY=re_...
+RESEND_FROM_EMAIL=AegisVault <noreply@yourdomain.com>
+```
+
+Generate secrets with:
+```bash
+node -e "console.log(require('crypto').randomBytes(64).toString('base64'))"  # JWT_ACCESS_SECRET
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"  # SERVER_ENCRYPTION_KEY
+```
+
+---
+
+## MFA Options
+
+AegisVault supports three MFA methods, configurable per-account in Settings:
+
+| Method | How it works | Setup |
+|--------|-------------|-------|
+| **TOTP (Authenticator App)** | Time-based 6-digit codes via any TOTP app (Google Authenticator, Authy, etc.) | Settings → Security → Enable Authenticator |
+| **SMS OTP** | 6-digit code sent to your phone number via Twilio | Settings → Security → Add Phone Number |
+| **Email OTP** | 6-digit code sent to your account email via Resend | Settings → Security → Enable Email MFA |
+| **Passkey (WebAuthn)** | Biometric or hardware key. Scan a QR code in the browser to register a passkey from your phone | Settings → Passkeys → Add Passkey |
+
+Priority order if multiple methods enabled: TOTP > SMS > Email.
+
+Backup codes (8 per account, 128-bit entropy) are generated when TOTP is enabled and can be used if your primary MFA device is unavailable.
 
 ---
 

@@ -183,12 +183,17 @@ export function useVaultItems(): UseVaultItemsReturn {
     const item = decryptedItems.find((i) => i.id === id);
     if (!item) return;
 
-    await fetch(`/api/vault/items/${id}`, {
+    const res = await fetch(`/api/vault/items/${id}`, {
       method:  'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ isFavorite: !item.isFavorite }),
       credentials: 'include',
     });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error ?? 'Request failed');
+    }
 
     setDecryptedItems((prev) =>
       prev.map((i) => (i.id === id ? { ...i, isFavorite: !i.isFavorite } : i)),
@@ -198,12 +203,18 @@ export function useVaultItems(): UseVaultItemsReturn {
   // ── Archive ────────────────────────────────────────────────────────────────
 
   const archiveItem = useCallback(async (id: string, archived: boolean) => {
-    await fetch(`/api/vault/items/${id}`, {
+    const res = await fetch(`/api/vault/items/${id}`, {
       method:  'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ isArchived: archived }),
       credentials: 'include',
     });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error ?? 'Request failed');
+    }
+
     setDecryptedItems((prev) =>
       prev.map((i) => (i.id === id ? { ...i, isArchived: archived } : i)),
     );

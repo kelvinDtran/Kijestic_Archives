@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Shield, Clock, Key, Download, Upload, Trash2, CheckCircle2, AlertTriangle, Loader2, Fingerprint, Plus } from 'lucide-react';
+import { Shield, Clock, Key, Download, Upload, Trash2, CheckCircle2, AlertTriangle, Loader2, Fingerprint, Plus, Pencil, Smartphone, Phone, Mail } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { useVault } from '@/contexts/VaultContext';
 import {
@@ -31,11 +31,42 @@ export default function SettingsPage() {
   const importFileRef = useRef<HTMLInputElement>(null);
 
   // Passkey state
-  interface PasskeyCredential { id: string; name: string; deviceType: string; backedUp: boolean; createdAt: string; lastUsedAt: string | null; }
+  interface PasskeyCredential { id: string; name: string; deviceType: string; backedUp: boolean; transports: string[]; createdAt: string; lastUsedAt: string | null; }
   const [passkeys, setPasskeys] = useState<PasskeyCredential[]>([]);
   const [isRegisteringPasskey, setIsRegisteringPasskey] = useState(false);
   const [passkeyError, setPasskeyError] = useState<string | null>(null);
   const [deletingPasskeyId, setDeletingPasskeyId] = useState<string | null>(null);
+
+  // Rename state
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [isSavingRename, setIsSavingRename] = useState(false);
+
+  // SMS MFA state
+  const [smsEnabled, setSmsEnabled] = useState(false);
+  const [phoneNumber, setPhoneNumber] = useState<string | null>(null);
+  const [smsStep, setSmsStep] = useState<'idle' | 'verify'>('idle');
+  const [smsPhoneInput, setSmsPhoneInput] = useState('');
+  const [smsCodeInput, setSmsCodeInput] = useState('');
+  const [isSendingCode, setIsSendingCode] = useState(false);
+  const [isVerifyingSms, setIsVerifyingSms] = useState(false);
+  const [isDisablingSms, setIsDisablingSms] = useState(false);
+  const [smsDisableCode, setSmsDisableCode] = useState('');
+  const [showSmsDisableForm, setShowSmsDisableForm] = useState(false);
+  const [smsError, setSmsError] = useState<string | null>(null);
+  const [smsSuccess, setSmsSuccess] = useState<string | null>(null);
+
+  // Email MFA state
+  const [emailMfaEnabled, setEmailMfaEnabled] = useState(false);
+  const [emailMfaStep, setEmailMfaStep] = useState<'idle' | 'verify'>('idle');
+  const [emailMfaCode, setEmailMfaCode] = useState('');
+  const [isEnablingEmail, setIsEnablingEmail] = useState(false);
+  const [isVerifyingEmail, setIsVerifyingEmail] = useState(false);
+  const [isDisablingEmail, setIsDisablingEmail] = useState(false);
+  const [emailDisableCode, setEmailDisableCode] = useState('');
+  const [showEmailDisableForm, setShowEmailDisableForm] = useState(false);
+  const [emailMfaError, setEmailMfaError] = useState<string | null>(null);
+  const [emailMfaSuccess, setEmailMfaSuccess] = useState<string | null>(null);
 
   const fetchPasskeys = useCallback(async () => {
     const res = await fetch('/api/auth/webauthn/credentials', { credentials: 'include' });
@@ -97,6 +128,36 @@ export default function SettingsPage() {
     }
   };
 
+  const startRename = (pk: PasskeyCredential) => {
+    setRenamingId(pk.id);
+    setRenameValue(pk.name);
+  };
+
+  const cancelRename = () => {
+    setRenamingId(null);
+    setRenameValue('');
+  };
+
+  const saveRename = async (id: string) => {
+    const trimmed = renameValue.trim();
+    if (!trimmed) return;
+    setIsSavingRename(true);
+    try {
+      const res = await fetch(`/api/auth/webauthn/credentials/${id}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ name: trimmed }),
+        credentials: 'include',
+      });
+      if (res.ok) {
+        setPasskeys((prev) => prev.map((p) => p.id === id ? { ...p, name: trimmed } : p));
+        cancelRename();
+      }
+    } finally {
+      setIsSavingRename(false);
+    }
+  };
+
   useEffect(() => {
     fetch('/api/account/preferences', { credentials: 'include' })
       .then((r) => r.json())
@@ -104,6 +165,9 @@ export default function SettingsPage() {
         if (d.success) {
           setLockTimeout(d.data.lockTimeout ?? 300);
           setMfaEnabled(d.data.totpEnabled ?? false);
+          setSmsEnabled(d.data.smsEnabled ?? false);
+          setPhoneNumber(d.data.phoneNumber ?? null);
+          setEmailMfaEnabled(d.data.emailMfaEnabled ?? false);
         }
       })
       .catch(() => {})
@@ -217,6 +281,176 @@ export default function SettingsPage() {
     }
   };
 
+  // ── SMS MFA ───────────────────────────────────────────────────────────────
+
+  const maskPhone = (num: string) => {
+    // E.164: keep country code prefix and last 4 digits, mask the rest
+    const cleaned = num.replace(/\s/g, '');
+    if (cleaned.length <= 5) return cleaned;
+    const prefix = cleaned.slice(0, cleaned.indexOf(' ') !== -1 ? cleaned.indexOf(' ') : 2);
+    const last4 = cleaned.slice(-4);
+    return `${prefix} *** *** ${last4}`;
+  };
+
+  const sendSmsCode = async () => {
+    setSmsError(null);
+    if (!smsPhoneInput.trim()) {
+      setSmsError('Please enter a phone number in E.164 format (e.g. +16025551234)');
+      return;
+    }
+    setIsSendingCode(true);
+    try {
+      const res = await fetch('/api/auth/mfa/sms/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber: smsPhoneInput.trim() }),
+        credentials: 'include',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Failed to send verification code');
+      setSmsStep('verify');
+    } catch (err) {
+      setSmsError(err instanceof Error ? err.message : 'Failed to send verification code');
+    } finally {
+      setIsSendingCode(false);
+    }
+  };
+
+  const verifySmsCode = async () => {
+    setSmsError(null);
+    if (!smsCodeInput.trim()) {
+      setSmsError('Please enter the 6-digit code');
+      return;
+    }
+    setIsVerifyingSms(true);
+    try {
+      const res = await fetch('/api/auth/mfa/sms/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: smsCodeInput.trim() }),
+        credentials: 'include',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Verification failed');
+      setSmsEnabled(true);
+      setPhoneNumber(smsPhoneInput.trim());
+      setSmsStep('idle');
+      setSmsPhoneInput('');
+      setSmsCodeInput('');
+      setSmsSuccess('SMS MFA enabled successfully');
+      setTimeout(() => setSmsSuccess(null), 3000);
+    } catch (err) {
+      setSmsError(err instanceof Error ? err.message : 'Verification failed');
+    } finally {
+      setIsVerifyingSms(false);
+    }
+  };
+
+  const disableSms = async () => {
+    setSmsError(null);
+    if (!smsDisableCode.trim()) {
+      setSmsError('Please enter your current SMS code or password to disable');
+      return;
+    }
+    setIsDisablingSms(true);
+    try {
+      const res = await fetch('/api/auth/mfa/sms/setup', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: smsDisableCode.trim() }),
+        credentials: 'include',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Failed to disable SMS MFA');
+      setSmsEnabled(false);
+      setPhoneNumber(null);
+      setShowSmsDisableForm(false);
+      setSmsDisableCode('');
+      setSmsSuccess('SMS MFA disabled');
+      setTimeout(() => setSmsSuccess(null), 3000);
+    } catch (err) {
+      setSmsError(err instanceof Error ? err.message : 'Failed to disable SMS MFA');
+    } finally {
+      setIsDisablingSms(false);
+    }
+  };
+
+  // ── Email MFA ─────────────────────────────────────────────────────────────
+
+  const enableEmailMfa = async () => {
+    setEmailMfaError(null);
+    setIsEnablingEmail(true);
+    try {
+      const res = await fetch('/api/auth/mfa/email/setup', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Failed to send verification code');
+      setEmailMfaStep('verify');
+    } catch (err) {
+      setEmailMfaError(err instanceof Error ? err.message : 'Failed to send verification code');
+    } finally {
+      setIsEnablingEmail(false);
+    }
+  };
+
+  const verifyEmailMfa = async () => {
+    setEmailMfaError(null);
+    if (!emailMfaCode.trim()) {
+      setEmailMfaError('Please enter the 6-digit code');
+      return;
+    }
+    setIsVerifyingEmail(true);
+    try {
+      const res = await fetch('/api/auth/mfa/email/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: emailMfaCode.trim() }),
+        credentials: 'include',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Verification failed');
+      setEmailMfaEnabled(true);
+      setEmailMfaStep('idle');
+      setEmailMfaCode('');
+      setEmailMfaSuccess('Email MFA enabled successfully');
+      setTimeout(() => setEmailMfaSuccess(null), 3000);
+    } catch (err) {
+      setEmailMfaError(err instanceof Error ? err.message : 'Verification failed');
+    } finally {
+      setIsVerifyingEmail(false);
+    }
+  };
+
+  const disableEmailMfa = async () => {
+    setEmailMfaError(null);
+    if (!emailDisableCode.trim()) {
+      setEmailMfaError('Please enter your current email code or password to disable');
+      return;
+    }
+    setIsDisablingEmail(true);
+    try {
+      const res = await fetch('/api/auth/mfa/email/setup', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: emailDisableCode.trim() }),
+        credentials: 'include',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Failed to disable Email MFA');
+      setEmailMfaEnabled(false);
+      setShowEmailDisableForm(false);
+      setEmailDisableCode('');
+      setEmailMfaSuccess('Email MFA disabled');
+      setTimeout(() => setEmailMfaSuccess(null), 3000);
+    } catch (err) {
+      setEmailMfaError(err instanceof Error ? err.message : 'Failed to disable Email MFA');
+    } finally {
+      setIsDisablingEmail(false);
+    }
+  };
+
   const timeoutOptions = [
     { label: '1 minute',   value: 60 },
     { label: '5 minutes',  value: 300 },
@@ -289,6 +523,255 @@ export default function SettingsPage() {
         )}
       </section>
 
+      {/* SMS MFA */}
+      <section className="aegis-card space-y-4">
+        <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
+          <Phone className="w-4 h-4 text-aegis-muted" /> SMS Two-Factor Authentication
+        </h2>
+
+        {smsError && (
+          <div className="flex items-center gap-2 text-xs text-aegis-danger bg-aegis-danger-muted border border-aegis-danger/30 rounded-lg px-3 py-2">
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" /> {smsError}
+          </div>
+        )}
+        {smsSuccess && (
+          <div className="flex items-center gap-2 text-xs text-aegis-success bg-aegis-success-muted border border-aegis-success/30 rounded-lg px-3 py-2">
+            <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" /> {smsSuccess}
+          </div>
+        )}
+
+        {smsEnabled && phoneNumber ? (
+          <>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-aegis-subtle">SMS MFA: Enabled</p>
+                <p className="text-xs text-aegis-muted mt-0.5">{maskPhone(phoneNumber)}</p>
+              </div>
+              <div className="text-xs px-2 py-1 rounded-full border bg-aegis-success-muted border-aegis-success text-aegis-success">
+                Enabled
+              </div>
+            </div>
+
+            {showSmsDisableForm ? (
+              <div className="space-y-2">
+                <p className="text-xs text-aegis-muted">
+                  Enter your current SMS code or account password to disable SMS MFA:
+                </p>
+                <input
+                  type="text"
+                  value={smsDisableCode}
+                  onChange={(e) => setSmsDisableCode(e.target.value)}
+                  placeholder="Code or password"
+                  maxLength={128}
+                  className="aegis-input text-sm w-full max-w-xs"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={disableSms}
+                    disabled={isDisablingSms}
+                    className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted flex items-center gap-2"
+                  >
+                    {isDisablingSms ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    Confirm Disable
+                  </button>
+                  <button
+                    onClick={() => { setShowSmsDisableForm(false); setSmsDisableCode(''); setSmsError(null); }}
+                    className="text-xs text-aegis-muted hover:text-aegis-text"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowSmsDisableForm(true)}
+                className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted"
+              >
+                Disable SMS MFA
+              </button>
+            )}
+          </>
+        ) : smsStep === 'verify' ? (
+          <div className="space-y-3">
+            <p className="text-sm text-aegis-subtle">
+              A 6-digit code was sent to <span className="text-aegis-text font-medium">{smsPhoneInput}</span>.
+              Enter it below to activate SMS MFA.
+            </p>
+            <input
+              type="text"
+              value={smsCodeInput}
+              onChange={(e) => setSmsCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="123456"
+              maxLength={6}
+              className="aegis-input text-sm w-40 tracking-widest text-center"
+            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={verifySmsCode}
+                disabled={isVerifyingSms || smsCodeInput.length !== 6}
+                className="aegis-btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
+              >
+                {isVerifyingSms ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Verify
+              </button>
+              <button
+                onClick={() => { setSmsStep('idle'); setSmsCodeInput(''); setSmsError(null); }}
+                className="text-xs text-aegis-muted hover:text-aegis-text"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm text-aegis-subtle">Add Phone Number</p>
+              <p className="text-xs text-aegis-muted mt-0.5">
+                Enter your number in E.164 format (e.g. +16025551234)
+              </p>
+            </div>
+            <input
+              type="tel"
+              value={smsPhoneInput}
+              onChange={(e) => setSmsPhoneInput(e.target.value)}
+              placeholder="+16025551234"
+              maxLength={20}
+              className="aegis-input text-sm w-64"
+            />
+            <button
+              onClick={sendSmsCode}
+              disabled={isSendingCode || !smsPhoneInput.trim()}
+              className="aegis-btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
+            >
+              {isSendingCode
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending…</>
+                : <><Phone className="w-4 h-4" /> Send Verification Code</>}
+            </button>
+          </div>
+        )}
+      </section>
+
+      {/* Email MFA */}
+      <section className="aegis-card space-y-4">
+        <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
+          <Mail className="w-4 h-4 text-aegis-muted" /> Email Two-Factor Authentication
+        </h2>
+
+        {emailMfaError && (
+          <div className="flex items-center gap-2 text-xs text-aegis-danger bg-aegis-danger-muted border border-aegis-danger/30 rounded-lg px-3 py-2">
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" /> {emailMfaError}
+          </div>
+        )}
+        {emailMfaSuccess && (
+          <div className="flex items-center gap-2 text-xs text-aegis-success bg-aegis-success-muted border border-aegis-success/30 rounded-lg px-3 py-2">
+            <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" /> {emailMfaSuccess}
+          </div>
+        )}
+
+        {emailMfaEnabled ? (
+          <>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-aegis-subtle">Email MFA: Enabled</p>
+                <p className="text-xs text-aegis-muted mt-0.5">
+                  A one-time code is sent to your account email during login
+                </p>
+              </div>
+              <div className="text-xs px-2 py-1 rounded-full border bg-aegis-success-muted border-aegis-success text-aegis-success">
+                Enabled
+              </div>
+            </div>
+
+            {showEmailDisableForm ? (
+              <div className="space-y-2">
+                <p className="text-xs text-aegis-muted">
+                  Enter your current email code or account password to disable Email MFA:
+                </p>
+                <input
+                  type="text"
+                  value={emailDisableCode}
+                  onChange={(e) => setEmailDisableCode(e.target.value)}
+                  placeholder="Code or password"
+                  maxLength={128}
+                  className="aegis-input text-sm w-full max-w-xs"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={disableEmailMfa}
+                    disabled={isDisablingEmail}
+                    className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted flex items-center gap-2"
+                  >
+                    {isDisablingEmail ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    Confirm Disable
+                  </button>
+                  <button
+                    onClick={() => { setShowEmailDisableForm(false); setEmailDisableCode(''); setEmailMfaError(null); }}
+                    className="text-xs text-aegis-muted hover:text-aegis-text"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowEmailDisableForm(true)}
+                className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted"
+              >
+                Disable Email MFA
+              </button>
+            )}
+          </>
+        ) : emailMfaStep === 'verify' ? (
+          <div className="space-y-3">
+            <p className="text-sm text-aegis-subtle">
+              A 6-digit code was sent to your account email. Enter it below to activate Email MFA.
+            </p>
+            <input
+              type="text"
+              value={emailMfaCode}
+              onChange={(e) => setEmailMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="123456"
+              maxLength={6}
+              className="aegis-input text-sm w-40 tracking-widest text-center"
+            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={verifyEmailMfa}
+                disabled={isVerifyingEmail || emailMfaCode.length !== 6}
+                className="aegis-btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
+              >
+                {isVerifyingEmail ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Verify
+              </button>
+              <button
+                onClick={() => { setEmailMfaStep('idle'); setEmailMfaCode(''); setEmailMfaError(null); }}
+                className="text-xs text-aegis-muted hover:text-aegis-text"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm text-aegis-subtle">Enable Email MFA</p>
+              <p className="text-xs text-aegis-muted mt-0.5">
+                Receive a one-time code at your account email during login
+              </p>
+            </div>
+            <button
+              onClick={enableEmailMfa}
+              disabled={isEnablingEmail}
+              className="aegis-btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
+            >
+              {isEnablingEmail
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending code…</>
+                : <><Mail className="w-4 h-4" /> Enable Email MFA</>}
+            </button>
+          </div>
+        )}
+      </section>
+
       {/* Passkeys */}
       <section className="aegis-card space-y-4">
         <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
@@ -297,6 +780,17 @@ export default function SettingsPage() {
         <p className="text-sm text-aegis-subtle">
           Sign in with your device biometrics or hardware security key — no password required.
         </p>
+
+        {/* Cross-device info banner */}
+        <div className="flex gap-2.5 bg-aegis-elevated border border-aegis-border rounded-lg px-3 py-2.5">
+          <Smartphone className="w-4 h-4 text-aegis-muted flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-aegis-muted leading-relaxed">
+            When adding a passkey, your browser will offer options including scanning a QR code
+            with your phone. This allows you to authenticate from your phone even on a shared
+            computer. You can add a passkey from this device (fingerprint / Face ID) or from
+            your phone — the browser will show both options automatically.
+          </p>
+        </div>
 
         {passkeyError && (
           <div className="flex items-center gap-2 text-xs text-aegis-danger bg-aegis-danger-muted border border-aegis-danger/30 rounded-lg px-3 py-2">
@@ -307,42 +801,94 @@ export default function SettingsPage() {
         {passkeys.length > 0 && (
           <ul className="space-y-2">
             {passkeys.map((pk) => (
-              <li key={pk.id} className="flex items-center justify-between gap-3 bg-aegis-elevated border border-aegis-border rounded-lg px-3 py-2">
-                <div className="min-w-0">
-                  <p className="text-sm text-aegis-text truncate">{pk.name}</p>
-                  <p className="text-xs text-aegis-muted">
-                    {pk.deviceType === 'multiDevice' ? 'Synced passkey' : 'Device-bound key'}
-                    {pk.backedUp && ' · backed up'}
-                    {' · '}
-                    {pk.lastUsedAt
-                      ? `used ${formatDistanceToNow(new Date(pk.lastUsedAt), { addSuffix: true })}`
-                      : `added ${formatDistanceToNow(new Date(pk.createdAt), { addSuffix: true })}`}
-                  </p>
-                </div>
-                <button
-                  onClick={() => deletePasskey(pk.id)}
-                  disabled={deletingPasskeyId === pk.id}
-                  className="p-1.5 text-aegis-muted hover:text-aegis-danger transition-colors flex-shrink-0"
-                  title="Remove passkey"
-                >
-                  {deletingPasskeyId === pk.id
-                    ? <Loader2 className="w-4 h-4 animate-spin" />
-                    : <Trash2 className="w-4 h-4" />}
-                </button>
+              <li key={pk.id} className="bg-aegis-elevated border border-aegis-border rounded-lg px-3 py-2">
+                {renamingId === pk.id ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') saveRename(pk.id);
+                        if (e.key === 'Escape') cancelRename();
+                      }}
+                      maxLength={64}
+                      autoFocus
+                      className="aegis-input text-sm flex-1 h-7 py-0"
+                    />
+                    <button
+                      onClick={() => saveRename(pk.id)}
+                      disabled={isSavingRename || !renameValue.trim()}
+                      className="text-xs text-aegis-accent hover:text-aegis-accent/80 disabled:opacity-50 flex-shrink-0"
+                    >
+                      {isSavingRename ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Save'}
+                    </button>
+                    <button
+                      onClick={cancelRename}
+                      className="text-xs text-aegis-muted hover:text-aegis-text flex-shrink-0"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm text-aegis-text truncate">{pk.name}</p>
+                      <p className="text-xs text-aegis-muted">
+                        {pk.transports?.includes('hybrid')
+                          ? 'Phone / Cross-Device'
+                          : pk.deviceType === 'multiDevice'
+                            ? 'Synced passkey'
+                            : 'Device-bound key'}
+                        {pk.backedUp && ' · backed up'}
+                        {' · '}
+                        {pk.lastUsedAt
+                          ? `used ${formatDistanceToNow(new Date(pk.lastUsedAt), { addSuffix: true })}`
+                          : `added ${formatDistanceToNow(new Date(pk.createdAt), { addSuffix: true })}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => startRename(pk)}
+                        className="p-1.5 text-aegis-muted hover:text-aegis-text transition-colors"
+                        title="Rename passkey"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => deletePasskey(pk.id)}
+                        disabled={deletingPasskeyId === pk.id}
+                        className="p-1.5 text-aegis-muted hover:text-aegis-danger transition-colors"
+                        title="Remove passkey"
+                      >
+                        {deletingPasskeyId === pk.id
+                          ? <Loader2 className="w-4 h-4 animate-spin" />
+                          : <Trash2 className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
         )}
 
-        <button
-          onClick={registerPasskey}
-          disabled={isRegisteringPasskey}
-          className="aegis-btn-secondary text-sm flex items-center gap-2"
-        >
-          {isRegisteringPasskey
-            ? <><Loader2 className="w-4 h-4 animate-spin" /> Registering…</>
-            : <><Plus className="w-4 h-4" /> Add Passkey</>}
-        </button>
+        <div className="space-y-1.5">
+          <button
+            onClick={registerPasskey}
+            disabled={isRegisteringPasskey}
+            className="aegis-btn-secondary text-sm flex items-center gap-2"
+          >
+            {isRegisteringPasskey
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Waiting for passkey…</>
+              : <><Plus className="w-4 h-4" /> Add Passkey</>}
+          </button>
+          {isRegisteringPasskey && (
+            <p className="text-xs text-aegis-muted">
+              Follow the browser prompt — you can use this device or scan the QR code with your phone.
+            </p>
+          )}
+        </div>
       </section>
 
       {/* Backup & Export */}

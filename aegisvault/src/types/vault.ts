@@ -85,6 +85,10 @@ export interface EncryptedVaultFile {
   encryptedMetadata: string;
   storagePath: string;
   encryptedSize: number;
+  scanStatus: ScanStatus;
+  scanDetections: number;
+  scanTotalEngines: number;
+  scannedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -101,6 +105,9 @@ export interface VaultFileInfo {
   id: string;
   metadata: VaultFileMetadata;
   encryptedSize: number;
+  scanStatus: ScanStatus;
+  scanDetections: number;
+  scanTotalEngines: number;
   createdAt: Date;
 }
 
@@ -120,6 +127,17 @@ export interface VaultFilter {
   isArchived?: boolean;
   isHighRisk?: boolean;
   tags?: string[];
+}
+
+// ── Malware scan ─────────────────────────────────────────────────────────────
+
+export type ScanStatus = 'PENDING' | 'CLEAN' | 'INFECTED' | 'UNKNOWN' | 'SKIPPED';
+
+export interface ScanResult {
+  status: ScanStatus;
+  detections: number;
+  totalEngines: number;
+  permalink?: string;
 }
 
 // KDF parameters (fetched from server, used for client-side key derivation)

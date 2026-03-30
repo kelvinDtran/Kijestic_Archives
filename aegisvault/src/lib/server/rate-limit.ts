@@ -26,11 +26,23 @@ export const RATE_LIMITS = {
 
 export type RateLimitAction = keyof typeof RATE_LIMITS;
 
+/**
+ * Actions that must fail closed (deny) when the DB is unavailable.
+ * Failing open on auth endpoints would allow unlimited login/MFA attempts
+ * if the rate-limit store becomes unreachable — a brute-force risk.
+ */
+const FAIL_CLOSED_ACTIONS = new Set<RateLimitAction>(['login', 'mfa']);
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
  * Get the client IP from the request.
  * Handles Vercel, Cloudflare, and direct connections.
+ *
+ * WARNING: X-Forwarded-For and X-Real-IP headers are only trustworthy when
+ * the application sits behind a correctly configured reverse proxy (e.g.,
+ * Nginx, Cloudflare, Vercel edge). If the server is exposed directly these
+ * headers can be spoofed by clients, allowing them to bypass rate limits.
  */
 export async function getClientIp(): Promise<string> {
   const headerList = await headers();
@@ -45,9 +57,12 @@ export async function getClientIp(): Promise<string> {
 /**
  * Hash an identifier for use as a rate limit key.
  * Hashing prevents storing raw IPs/emails in the database.
+ * Full 256-bit (64 hex chars) digest is used to prevent hash-collision
+ * attacks that could allow an attacker to share another user's rate-limit
+ * bucket.
  */
 export function hashIdentifier(value: string): string {
-  return createHash('sha256').update(value).digest('hex').slice(0, 16);
+  return createHash('sha256').update(value).digest('hex');
 }
 
 // ── Rate Limiter ──────────────────────────────────────────────────────────────
@@ -60,10 +75,14 @@ export interface RateLimitResult {
 }
 
 /**
- * Check and increment a rate limit counter.
+ * Check and increment a rate limit counter atomically.
+ * Uses a single PostgreSQL INSERT … ON CONFLICT DO UPDATE so that the
+ * read-then-write is never split across two round-trips, eliminating the
+ * TOCTOU race present in a non-atomic upsert + separate reset.
+ *
  * If the limit is exceeded, returns { allowed: false }.
  *
- * @param action  - The action being rate-limited
+ * @param action     - The action being rate-limited
  * @param identifier - Raw identifier (IP, email) — will be hashed internally
  */
 export async function checkRateLimit(
@@ -73,7 +92,6 @@ export async function checkRateLimit(
   const config = RATE_LIMITS[action];
   const key    = `${action}:${hashIdentifier(identifier)}`;
   const now    = new Date();
-  const resetAt = new Date(now.getTime() + config.windowMs);
 
   // Cleanup expired entries periodically (10% chance to avoid overhead)
   if (Math.random() < 0.1) {
@@ -83,50 +101,68 @@ export async function checkRateLimit(
   }
 
   try {
-    const entry = await db.rateLimitEntry.upsert({
-      where: { key },
-      create: { key, count: 1, resetAt },
-      update: {
-        count: { increment: 1 },
-        // Reset window if expired
-        resetAt: {
-          // Only update resetAt if the current entry has expired
-          // Note: Prisma doesn't support conditional updates directly;
-          // we handle this with a raw check
-        },
-      },
-    });
+    // Atomic upsert: insert a fresh row OR increment/reset within a single
+    // statement to avoid a TOCTOU race between reading the current count and
+    // writing the new one.
+    type RawRow = { count: number; resetAt: Date };
+    const rows = await db.$queryRaw<RawRow[]>`
+      INSERT INTO "RateLimitEntry" (id, key, count, "resetAt", "updatedAt")
+      VALUES (
+        gen_random_uuid()::text,
+        ${key},
+        1,
+        NOW() + ${config.windowMs} * interval '1 millisecond',
+        NOW()
+      )
+      ON CONFLICT (key) DO UPDATE SET
+        count    = CASE
+                     WHEN "RateLimitEntry"."resetAt" > NOW()
+                     THEN "RateLimitEntry".count + 1
+                     ELSE 1
+                   END,
+        "resetAt" = CASE
+                     WHEN "RateLimitEntry"."resetAt" > NOW()
+                     THEN "RateLimitEntry"."resetAt"
+                     ELSE NOW() + ${config.windowMs} * interval '1 millisecond'
+                   END,
+        "updatedAt" = NOW()
+      RETURNING count, "resetAt"
+    `;
 
-    // If the entry's reset window has passed, reset it
-    if (entry.resetAt < now) {
-      const reset = await db.rateLimitEntry.update({
-        where: { key },
-        data: { count: 1, resetAt },
-      });
-      return {
-        allowed:      true,
-        remaining:    config.max - 1,
-        resetAt:      reset.resetAt,
-        retryAfterMs: 0,
-      };
-    }
-
-    const remaining = Math.max(0, config.max - entry.count);
-    const allowed   = entry.count <= config.max;
+    const entry    = rows[0];
+    const resetAt  = new Date(entry.resetAt);
+    const count    = Number(entry.count);
+    const allowed  = count <= config.max;
+    const remaining = Math.max(0, config.max - count);
 
     return {
       allowed,
       remaining,
-      resetAt:      entry.resetAt,
-      retryAfterMs: allowed ? 0 : entry.resetAt.getTime() - now.getTime(),
+      resetAt,
+      retryAfterMs: allowed ? 0 : resetAt.getTime() - now.getTime(),
     };
-  } catch {
-    // If rate limiting fails (DB issue), allow the request but log
-    console.error('[RateLimit] Failed to check rate limit for key:', key);
+  } catch (err) {
+    if (FAIL_CLOSED_ACTIONS.has(action)) {
+      // Deliberately fail closed for authentication actions.
+      // If the rate-limit store is unavailable we must not allow unlimited
+      // login or MFA attempts — the safer default is to deny and surface a
+      // 503-style response rather than risk brute-force exposure.
+      console.error('[RateLimit] DB unavailable for auth action — failing closed:', action, err);
+      return {
+        allowed:      false,
+        remaining:    0,
+        resetAt:      new Date(),
+        retryAfterMs: 0,
+      };
+    }
+
+    // For non-auth actions (register, api) failing open is acceptable, but
+    // the error should still be logged for observability.
+    console.error('[RateLimit] Failed to check rate limit for key:', key, err);
     return {
       allowed:      true,
       remaining:    config.max,
-      resetAt,
+      resetAt:      new Date(now.getTime() + config.windowMs),
       retryAfterMs: 0,
     };
   }

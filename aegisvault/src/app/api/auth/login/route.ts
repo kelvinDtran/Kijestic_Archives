@@ -6,22 +6,39 @@
  *
  * Flow:
  *   1. Validate credentials
- *   2. If TOTP enabled, verify the code
+ *   2. If MFA is enabled, either verify inline (TOTP) or issue a short-lived
+ *      mfaToken and return a challenge (SMS / Email OTP)
  *   3. Create session → set httpOnly cookies
  *   4. Return user info (no tokens in body — they're in cookies)
+ *
+ * Priority order when multiple MFA methods are enabled: TOTP > SMS > Email
  *
  * The vault is still "locked" after login. The client must prompt for
  * the master password separately to unlock vault decryption.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { SignJWT } from 'jose';
 import { z } from 'zod';
 import { db } from '@/lib/server/db';
 import { verifyAccountPassword } from '@/lib/auth/password';
 import { verifyTotpCode } from '@/lib/auth/totp';
-import { logAuditEvent, buildAuditContext } from '@/lib/server/audit';
+import { sendSmsOtp } from '@/lib/auth/sms-otp';
+import { sendEmailOtp } from '@/lib/auth/email-otp';
+import { logAuditEvent } from '@/lib/server/audit';
 import { enforceRateLimit, getClientIp } from '@/lib/server/rate-limit';
 import { createSessionAndSetCookies } from '@/lib/server/session';
+
+// Shared secret used to sign short-lived MFA challenge tokens
+function loadJwtSecret(): Uint8Array {
+  const secret = process.env.JWT_ACCESS_SECRET;
+  if (!secret) {
+    throw new Error('JWT_ACCESS_SECRET environment variable is not set. Refusing to start.');
+  }
+  return new TextEncoder().encode(secret);
+}
+
+const ACCESS_SECRET = loadJwtSecret();
 
 const LoginSchema = z.object({
   email:    z.string().email().max(254).toLowerCase().trim(),
@@ -56,12 +73,15 @@ export async function POST(req: NextRequest) {
   const user = await db.user.findUnique({
     where:  { email },
     select: {
-      id:           true,
-      email:        true,
-      passwordHash: true,
-      totpEnabled:  true,
-      totpSecret:   true,
-      lockTimeout:  true,
+      id:              true,
+      email:           true,
+      passwordHash:    true,
+      totpEnabled:     true,
+      totpSecret:      true,
+      smsEnabled:      true,
+      phoneNumber:     true,
+      emailMfaEnabled: true,
+      lockTimeout:     true,
     },
   });
 
@@ -85,12 +105,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── TOTP verification ──────────────────────────────────────────────────────
+  // ── MFA dispatch — priority order: TOTP > SMS > Email ─────────────────────
+
+  // TOTP: verify inline (code supplied) or signal challenge to client
   if (user.totpEnabled) {
     if (!totpCode) {
-      // Signal to the client that MFA is required
+      // Signal to the client that TOTP MFA is required
       return NextResponse.json(
-        { success: false, error: 'MFA required', code: 'MFA_REQUIRED' },
+        { success: false, mfaRequired: true, mfaType: 'totp', error: 'MFA required', code: 'MFA_REQUIRED' },
         { status: 401 },
       );
     }
@@ -102,7 +124,8 @@ export async function POST(req: NextRequest) {
         metadata: { type: 'totp' },
       });
       // Rate limit MFA failures separately
-      await enforceRateLimit('mfa', ip);
+      const mfaLimitResponse = await enforceRateLimit('mfa', ip);
+      if (mfaLimitResponse) return mfaLimitResponse;
       return NextResponse.json(
         { success: false, error: 'Invalid MFA code', code: 'MFA_INVALID' },
         { status: 401 },
@@ -114,6 +137,43 @@ export async function POST(req: NextRequest) {
       ...auditCtx,
       metadata: { type: 'totp' },
     });
+  } else if (user.smsEnabled) {
+    // SMS OTP: send code then return a short-lived mfaToken for the verify step
+    if (!user.phoneNumber) {
+      return NextResponse.json(
+        { success: false, error: 'SMS MFA is enabled but no phone number is configured' },
+        { status: 500 },
+      );
+    }
+
+    await sendSmsOtp(user.id, user.phoneNumber);
+
+    const mfaToken = await new SignJWT({ mfaType: 'sms', purpose: 'mfa-challenge' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject(user.id)
+      .setIssuedAt()
+      .setExpirationTime('15m')
+      .sign(ACCESS_SECRET);
+
+    return NextResponse.json(
+      { success: false, mfaRequired: true, mfaType: 'sms', mfaToken },
+      { status: 401 },
+    );
+  } else if (user.emailMfaEnabled) {
+    // Email OTP: send code then return a short-lived mfaToken for the verify step
+    await sendEmailOtp(user.id, user.email);
+
+    const mfaToken = await new SignJWT({ mfaType: 'email', purpose: 'mfa-challenge' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject(user.id)
+      .setIssuedAt()
+      .setExpirationTime('15m')
+      .sign(ACCESS_SECRET);
+
+    return NextResponse.json(
+      { success: false, mfaRequired: true, mfaType: 'email', mfaToken },
+      { status: 401 },
+    );
   }
 
   // ── Create session ─────────────────────────────────────────────────────────
@@ -125,20 +185,23 @@ export async function POST(req: NextRequest) {
     data:  { lastLoginAt: new Date() },
   });
 
+  const mfaUsed = user.totpEnabled || user.smsEnabled || user.emailMfaEnabled;
   await logAuditEvent('AUTH_LOGIN_SUCCESS', {
     userId: user.id,
     ...auditCtx,
-    metadata: { mfa: user.totpEnabled },
+    metadata: { mfa: mfaUsed },
   });
 
   return NextResponse.json({
     success: true,
     data: {
       user: {
-        id:          user.id,
-        email:       user.email,
-        totpEnabled: user.totpEnabled,
-        lockTimeout: user.lockTimeout,
+        id:              user.id,
+        email:           user.email,
+        totpEnabled:     user.totpEnabled,
+        smsEnabled:      user.smsEnabled,
+        emailMfaEnabled: user.emailMfaEnabled,
+        lockTimeout:     user.lockTimeout,
       },
     },
   });

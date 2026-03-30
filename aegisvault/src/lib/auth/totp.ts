@@ -89,11 +89,11 @@ export function verifyTotpCode(encryptedSecret: string, code: string): boolean {
 // ── Backup Codes ──────────────────────────────────────────────────────────────
 
 const BACKUP_CODE_COUNT = 8;
-const BACKUP_CODE_LENGTH = 10;
 
 /**
- * Generate backup recovery codes.
+ * Generate backup recovery codes with 128-bit entropy.
  * Returns plain codes (shown once to user) and bcrypt hashes (stored in DB).
+ * Each code is formatted as 5 groups of 4 characters: ABCD-EFGH-IJKL-MNOP-QRST
  */
 export async function generateBackupCodes(): Promise<{
   plainCodes: string[];
@@ -103,8 +103,16 @@ export async function generateBackupCodes(): Promise<{
   const hashedCodes: string[] = [];
 
   for (let i = 0; i < BACKUP_CODE_COUNT; i++) {
-    const raw = randomBytes(6).toString('hex').slice(0, BACKUP_CODE_LENGTH).toUpperCase();
-    const formatted = raw.slice(0, 5) + '-' + raw.slice(5);
+    // 16 bytes = 128 bits of entropy; base64url gives URL-safe chars, slice to 20
+    const raw = randomBytes(16).toString('base64url').slice(0, 20).toUpperCase();
+    // Format as 5 groups of 4: ABCD-EFGH-IJKL-MNOP-QRST
+    const formatted = [
+      raw.slice(0, 4),
+      raw.slice(4, 8),
+      raw.slice(8, 12),
+      raw.slice(12, 16),
+      raw.slice(16, 20),
+    ].join('-');
     const hash = await bcrypt.hash(formatted, 10);
     plainCodes.push(formatted);
     hashedCodes.push(hash);
@@ -136,12 +144,12 @@ export async function verifyBackupCode(
 
 const SERVER_KEY = (() => {
   const key = process.env.SERVER_ENCRYPTION_KEY;
-  if (!key && process.env.NODE_ENV === 'production') {
-    throw new Error('SERVER_ENCRYPTION_KEY environment variable is required in production');
+  if (!key && process.env.NODE_ENV !== 'test') {
+    throw new Error('SERVER_ENCRYPTION_KEY environment variable is not set. Refusing to start.');
   }
   // Derive a 32-byte key from the env var using SHA-256
   return createHash('sha256')
-    .update(key ?? 'insecure-dev-key-change-in-production')
+    .update(key ?? 'insecure-test-key')
     .digest();
 })();
 

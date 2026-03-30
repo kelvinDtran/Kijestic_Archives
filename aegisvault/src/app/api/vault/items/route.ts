@@ -60,8 +60,8 @@ const CreateItemSchema = z.object({
   itemType:         z.enum(['PASSWORD','API_KEY','CRYPTO','NOTE','DOCUMENT','RECOVERY_CODE','IMAGE','OTHER']),
   isFavorite:       z.boolean().default(false),
   isHighRisk:       z.boolean().default(false),
-  encryptedItemKey: z.string().min(1, 'encryptedItemKey is required'),
-  encryptedData:    z.string().min(1, 'encryptedData is required'),
+  encryptedItemKey: z.string().min(1, 'encryptedItemKey is required').max(512),
+  encryptedData:    z.string().min(1, 'encryptedData is required').max(1048576),
 });
 
 export async function POST(req: NextRequest) {

@@ -20,7 +20,8 @@ export async function GET(req: NextRequest) {
   }
 
   const url   = new URL(req.url);
-  const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50', 10), 200);
+  const rawLimit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+  const limit = Math.min(isNaN(rawLimit) || rawLimit < 1 ? 50 : rawLimit, 200);
 
   const logs = await getUserAuditLogs(auth.sub, limit);
 

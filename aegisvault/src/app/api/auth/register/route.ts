@@ -77,8 +77,8 @@ export async function POST(req: NextRequest) {
     // Add artificial delay to match the timing of a successful registration
     await new Promise((r) => setTimeout(r, 200));
     return NextResponse.json(
-      { success: false, error: 'Unable to create account. Please try again.' },
-      { status: 409 },
+      { success: false, error: 'Registration failed. Please check your details.' },
+      { status: 400 },
     );
   }
 

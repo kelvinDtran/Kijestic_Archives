@@ -14,12 +14,27 @@ export async function GET(_req: NextRequest) {
 
   const user = await db.user.findUnique({
     where:  { id: auth.sub },
-    select: { lockTimeout: true, totpEnabled: true },
+    select: {
+      lockTimeout:      true,
+      totpEnabled:      true,
+      smsEnabled:       true,
+      phoneNumber:      true,
+      emailMfaEnabled:  true,
+    },
   });
 
   if (!user) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
 
-  return NextResponse.json({ success: true, data: user });
+  return NextResponse.json({
+    success: true,
+    data: {
+      lockTimeout:     user.lockTimeout,
+      totpEnabled:     user.totpEnabled,
+      smsEnabled:      user.smsEnabled,
+      phoneNumber:     user.phoneNumber,
+      emailMfaEnabled: user.emailMfaEnabled,
+    },
+  });
 }
 
 const PrefsSchema = z.object({

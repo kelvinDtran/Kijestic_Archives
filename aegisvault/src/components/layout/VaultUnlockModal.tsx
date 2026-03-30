@@ -25,8 +25,14 @@ export function VaultUnlockModal() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!masterPw.trim()) return;
-    await unlock(masterPw);
-    if (!unlockError) setMasterPw(''); // clear on success
+    try {
+      await unlock(masterPw);
+      // If unlock succeeded the modal will unmount (isLocked → false),
+      // but clear the field defensively in case the parent keeps it mounted.
+      setMasterPw('');
+    } catch {
+      // unlock() threw — error is displayed via unlockError from context.
+    }
   };
 
   return (

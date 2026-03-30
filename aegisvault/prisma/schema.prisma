@@ -41,8 +41,11 @@ model User {
   // TOTP secret encrypted at rest with SERVER_ENCRYPTION_KEY env var
   // This is a server-managed secret (not user-controlled)
   totpSecret    String?
-  // bcrypt-hashed backup codes for TOTP recovery (one-time use)
-  backupCodes   Json?
+  // SMS MFA
+  phoneNumber    String?   // E.164 format e.g. +16025551234
+  smsEnabled     Boolean   @default(false)
+  // Email MFA
+  emailMfaEnabled Boolean  @default(false)
 
   // ── Vault preferences ─────────────────────────────────────────────────────
   // Inactivity lock timeout in seconds (0 = never, but discouraged)
@@ -59,8 +62,46 @@ model User {
   vaultFiles          VaultFile[]
   webauthnCredentials WebAuthnCredential[]
   auditLogs           AuditLog[]
+  backupCodes         BackupCode[]
+  otpCodes            OtpCode[]
 
   @@index([email])
+}
+
+// ── Backup Codes ──────────────────────────────────────────────────────────────
+
+model BackupCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String    // bcrypt hash of the plain code
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ── OTP Codes ─────────────────────────────────────────────────────────────────
+
+enum OtpCodeType {
+  SMS
+  EMAIL
+}
+
+model OtpCode {
+  id        String      @id @default(cuid())
+  userId    String
+  codeHash  String      // bcrypt hash of 6-digit code
+  type      OtpCodeType
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime    @default(now())
+
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([expiresAt])
 }
 
 // ── WebAuthn Credentials ──────────────────────────────────────────────────────
@@ -208,11 +249,29 @@ model VaultFile {
   // Size of the encrypted blob (for quota management — reveals file size to server)
   encryptedSize Int
 
+  // ── Malware scan results ──────────────────────────────────────────────────
+  // Populated by client-side hash scan before encryption + upload.
+  // scanStatus: "CLEAN" | "INFECTED" | "UNKNOWN" | "SKIPPED" | "PENDING"
+  scanStatus       ScanStatus @default(PENDING)
+  // Number of AV engines that flagged this file as malicious (0 = clean)
+  scanDetections   Int        @default(0)
+  // Total number of AV engines that analyzed this file
+  scanTotalEngines Int        @default(0)
+  scannedAt        DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([vaultItemId])
+}
+
+enum ScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  UNKNOWN
+  SKIPPED
 }
 
 // ── Audit Log ─────────────────────────────────────────────────────────────────
@@ -261,6 +320,9 @@ enum AuditEvent {
   VAULT_ITEM_DELETED
   VAULT_ITEM_ARCHIVED
   VAULT_FILE_UPLOADED
+  VAULT_FILE_SCAN_CLEAN
+  VAULT_FILE_SCAN_INFECTED
+  VAULT_FILE_SCAN_UNKNOWN
   VAULT_FILE_DELETED
   VAULT_EXPORTED
   VAULT_IMPORTED

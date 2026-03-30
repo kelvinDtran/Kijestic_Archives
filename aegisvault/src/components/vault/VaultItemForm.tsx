@@ -16,9 +16,11 @@ import { PasswordGenerator } from './PasswordGenerator';
 import type { ItemType, VaultItemFormData } from '@/types/vault';
 import { ITEM_TYPE_LABELS } from '@/lib/utils';
 
+const ITEM_TYPES = ['PASSWORD', 'API_KEY', 'CRYPTO', 'NOTE', 'DOCUMENT', 'RECOVERY_CODE', 'IMAGE', 'OTHER'] as const;
+
 const FormSchema = z.object({
   title:       z.string().min(1, 'Title is required').max(200),
-  itemType:    z.string(),
+  itemType:    z.enum(ITEM_TYPES),
   isFavorite:  z.boolean().default(false),
   isHighRisk:  z.boolean().default(false),
   website:     z.string().max(500).optional(),
@@ -66,7 +68,7 @@ export function VaultItemForm({ onSubmit, onCancel, initialValues, isEditing }: 
     },
   });
 
-  const watchedType     = watch('itemType') as ItemType;
+  const watchedType     = watch('itemType');
   const watchedHighRisk = watch('isHighRisk');
 
   const handleHighRiskToggle = (checked: boolean) => {
@@ -92,7 +94,7 @@ export function VaultItemForm({ onSubmit, onCancel, initialValues, isEditing }: 
         : [];
 
       const formData: VaultItemFormData = {
-        itemType:   values.itemType as ItemType,
+        itemType:   values.itemType,
         isFavorite: values.isFavorite,
         isHighRisk: values.isHighRisk,
         data: {
@@ -133,7 +135,7 @@ export function VaultItemForm({ onSubmit, onCancel, initialValues, isEditing }: 
   };
 
   const addCustomField = () => {
-    setCustomFields((f) => [...f, { id: Math.random().toString(36).slice(2), key: '', value: '', isSecret: false }]);
+    setCustomFields((f) => [...f, { id: crypto.randomUUID(), key: '', value: '', isSecret: false }]);
   };
 
   return (

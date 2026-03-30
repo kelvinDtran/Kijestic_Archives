@@ -15,9 +15,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { jwtVerify } from 'jose';
 
-const ACCESS_SECRET = new TextEncoder().encode(
-  process.env.JWT_ACCESS_SECRET ?? 'INSECURE_DEV_SECRET_CHANGE_IN_PRODUCTION',
-);
+function loadJwtSecret(): Uint8Array {
+  const secret = process.env.JWT_ACCESS_SECRET;
+  if (!secret) {
+    throw new Error('JWT_ACCESS_SECRET environment variable is not set. Refusing to start.');
+  }
+  return new TextEncoder().encode(secret);
+}
+
+const ACCESS_SECRET = loadJwtSecret();
 
 // Routes that require authentication
 const PROTECTED_PREFIXES = ['/dashboard', '/vault', '/settings', '/sessions', '/audit'];

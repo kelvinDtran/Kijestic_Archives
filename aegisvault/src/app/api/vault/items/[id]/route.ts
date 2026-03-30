@@ -31,6 +31,10 @@ export async function GET(_req: NextRequest, { params }: Params) {
           encryptedMetadata: true,
           storagePath:      true,
           encryptedSize:    true,
+          scanStatus:       true,
+          scanDetections:   true,
+          scanTotalEngines: true,
+          scannedAt:        true,
           createdAt:        true,
         },
       },
@@ -124,6 +128,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       ...(parsed.data.isFavorite !== undefined && { isFavorite: parsed.data.isFavorite }),
       ...(parsed.data.isArchived !== undefined && { isArchived: parsed.data.isArchived }),
     },
+    select: { id: true, isFavorite: true, isArchived: true, updatedAt: true },
   });
 
   if (parsed.data.isArchived) {

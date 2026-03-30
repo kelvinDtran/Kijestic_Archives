@@ -17,6 +17,7 @@ import { getAuthFromRequest } from '@/lib/auth/jwt';
 import { db } from '@/lib/server/db';
 import { uploadEncryptedFile, generateStoragePath } from '@/lib/server/storage';
 import { logAuditEvent, buildAuditContext } from '@/lib/server/audit';
+import type { ScanStatus } from '@prisma/client';
 
 const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE ?? '10485760', 10); // 10 MB
 
@@ -32,6 +33,17 @@ export async function POST(req: NextRequest) {
   const encryptedFileKey  = formData.get('encryptedFileKey');
   const encryptedMetadata = formData.get('encryptedMetadata');
   const vaultItemId       = formData.get('vaultItemId') ?? null;
+  const rawScanStatus     = formData.get('scanStatus');
+  const rawScanDetections = formData.get('scanDetections');
+  const rawScanTotal      = formData.get('scanTotalEngines');
+
+  const VALID_SCAN_STATUSES: ScanStatus[] = ['PENDING', 'CLEAN', 'INFECTED', 'UNKNOWN', 'SKIPPED'];
+  const scanStatus: ScanStatus =
+    typeof rawScanStatus === 'string' && VALID_SCAN_STATUSES.includes(rawScanStatus as ScanStatus)
+      ? (rawScanStatus as ScanStatus)
+      : 'PENDING';
+  const scanDetections   = typeof rawScanDetections === 'string' ? Math.max(0, parseInt(rawScanDetections, 10) || 0) : 0;
+  const scanTotalEngines = typeof rawScanTotal === 'string' ? Math.max(0, parseInt(rawScanTotal, 10) || 0) : 0;
 
   if (!(fileField instanceof Blob) || typeof encryptedFileKey !== 'string' || typeof encryptedMetadata !== 'string') {
     return NextResponse.json({ success: false, error: 'Missing required fields' }, { status: 400 });
@@ -63,12 +75,16 @@ export async function POST(req: NextRequest) {
   // Record in database
   const vaultFile = await db.vaultFile.create({
     data: {
-      userId:           auth.sub,
-      vaultItemId:      typeof vaultItemId === 'string' ? vaultItemId : null,
+      userId:            auth.sub,
+      vaultItemId:       typeof vaultItemId === 'string' ? vaultItemId : null,
       encryptedFileKey,
       encryptedMetadata,
       storagePath,
-      encryptedSize:    encryptedBytes.length,
+      encryptedSize:     encryptedBytes.length,
+      scanStatus,
+      scanDetections,
+      scanTotalEngines,
+      scannedAt:         scanStatus !== 'PENDING' ? new Date() : null,
     },
     select: {
       id:               true,
@@ -76,6 +92,10 @@ export async function POST(req: NextRequest) {
       encryptedMetadata: true,
       encryptedSize:    true,
       storagePath:      true,
+      scanStatus:       true,
+      scanDetections:   true,
+      scanTotalEngines: true,
+      scannedAt:        true,
       createdAt:        true,
     },
   });
@@ -83,7 +103,12 @@ export async function POST(req: NextRequest) {
   const ctx = await buildAuditContext(auth.sub);
   await logAuditEvent('VAULT_FILE_UPLOADED', {
     ...ctx,
-    metadata: { encryptedSize: encryptedBytes.length },
+    metadata: {
+      encryptedSize:    encryptedBytes.length,
+      scanStatus,
+      scanDetections,
+      scanTotalEngines,
+    },
   });
 
   return NextResponse.json({ success: true, data: { file: vaultFile } }, { status: 201 });

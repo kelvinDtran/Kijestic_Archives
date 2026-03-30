@@ -14,12 +14,19 @@
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import { createHash, randomBytes } from 'crypto';
 import { cookies } from 'next/headers';
+import { db } from '../server/db';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const ACCESS_SECRET = new TextEncoder().encode(
-  process.env.JWT_ACCESS_SECRET ?? 'INSECURE_DEV_SECRET_CHANGE_IN_PRODUCTION',
-);
+function loadJwtSecret(): Uint8Array {
+  const secret = process.env.JWT_ACCESS_SECRET;
+  if (!secret) {
+    throw new Error('JWT_ACCESS_SECRET environment variable is not set. Refusing to start.');
+  }
+  return new TextEncoder().encode(secret);
+}
+
+const ACCESS_SECRET = loadJwtSecret();
 
 const ACCESS_TTL     = parseInt(process.env.ACCESS_TOKEN_TTL  ?? '900',     10); // 15 min
 const REFRESH_TTL    = parseInt(process.env.REFRESH_TOKEN_TTL ?? '2592000', 10); // 30 days
@@ -159,11 +166,23 @@ export async function getRefreshTokenFromCookies(): Promise<string | null> {
 
 /**
  * Authenticate an incoming API request.
- * Reads the access token from cookies and returns the decoded payload.
- * Returns null if the request is unauthenticated.
+ * Reads the access token from cookies, verifies its signature and expiry,
+ * then confirms the session has not been revoked in the database (JTI check).
+ * Returns null if the request is unauthenticated or the session is revoked.
  */
 export async function getAuthFromRequest(): Promise<AccessTokenPayload | null> {
   const token = await getAccessTokenFromCookies();
   if (!token) return null;
-  return verifyAccessToken(token);
+
+  const payload = await verifyAccessToken(token);
+  if (!payload || !payload.jti) return null;
+
+  const session = await db.session.findFirst({
+    where: { accessTokenJti: payload.jti },
+    select: { isRevoked: true },
+  });
+
+  if (!session || session.isRevoked) return null;
+
+  return payload;
 }

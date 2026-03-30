@@ -3,16 +3,20 @@
 /**
  * FileUpload — Client-side encrypted file upload component
  *
- * Files are encrypted with XChaCha20-Poly1305 BEFORE upload.
+ * Files are scanned for malware THEN encrypted with XChaCha20-Poly1305 BEFORE upload.
  * The server receives only encrypted bytes and never sees the plaintext file,
  * original filename, or MIME type.
  *
  * Upload flow:
  *   1. User selects a file
  *   2. Client validates size/extension
- *   3. Client generates a random file key (DEK)
- *   4. Client encrypts the file + metadata
- *   5. Uploads encrypted blob + wrapped key + encrypted metadata
+ *   3. Client computes SHA-256 hash of plaintext bytes (Web Crypto API)
+ *   4. Client sends hash to /api/scan — VirusTotal hash lookup (privacy-preserving)
+ *   5. If INFECTED → block upload, show warning
+ *   6. If CLEAN / UNKNOWN / SKIPPED → proceed
+ *   7. Client generates a random file key (DEK)
+ *   8. Client encrypts the file + metadata
+ *   9. Uploads encrypted blob + wrapped key + encrypted metadata + scan result
  *
  * Download flow:
  *   1. Fetch encrypted blob from /api/vault/files/[id]
@@ -22,11 +26,12 @@
  */
 
 import { useState, useRef } from 'react';
-import { Upload, Download, Trash2, FileText, Loader2, AlertTriangle } from 'lucide-react';
+import { Upload, Download, Trash2, FileText, Loader2, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { useVault } from '@/contexts/VaultContext';
 import { createFileKey, unwrapFileKey } from '@/lib/crypto/vault-crypto';
 import { encryptFile, decryptFile, validateFileForUpload, formatFileSize } from '@/lib/crypto/file-crypto';
-import type { VaultFileInfo } from '@/types/vault';
+import { ScanBadge } from '@/components/vault/ScanBadge';
+import type { VaultFileInfo, ScanStatus, ScanResult } from '@/types/vault';
 
 interface FileUploadProps {
   vaultItemId?: string;
@@ -34,6 +39,36 @@ interface FileUploadProps {
   onFileUploaded?: (file: VaultFileInfo) => void;
   onFileDeleted?: (fileId: string) => void;
 }
+
+// ── Hash helper ───────────────────────────────────────────────────────────────
+
+async function computeSha256(buffer: ArrayBuffer): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+// ── Scan helper ───────────────────────────────────────────────────────────────
+
+async function scanFile(hash: string): Promise<ScanResult> {
+  const res = await fetch('/api/scan', {
+    method:      'POST',
+    headers:     { 'Content-Type': 'application/json' },
+    body:        JSON.stringify({ hash }),
+    credentials: 'include',
+  });
+
+  if (!res.ok) {
+    // Scan endpoint unavailable — fail open (don't block upload)
+    return { status: 'UNKNOWN', detections: 0, totalEngines: 0 };
+  }
+
+  const body = await res.json();
+  return (body.data as ScanResult) ?? { status: 'UNKNOWN', detections: 0, totalEngines: 0 };
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export function FileUpload({
   vaultItemId,
@@ -44,11 +79,12 @@ export function FileUpload({
   const { getVaultKey } = useVault();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [isUploading, setIsUploading]           = useState(false);
-  const [uploadError, setUploadError]           = useState<string | null>(null);
-  const [downloadingId, setDownloadingId]       = useState<string | null>(null);
-  const [deletingId, setDeletingId]             = useState<string | null>(null);
-  const [dragOver, setDragOver]                 = useState(false);
+  const [isUploading, setIsUploading]     = useState(false);
+  const [uploadStage, setUploadStage]     = useState<'scanning' | 'encrypting' | null>(null);
+  const [uploadError, setUploadError]     = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId]       = useState<string | null>(null);
+  const [dragOver, setDragOver]           = useState(false);
 
   // ── Upload ──────────────────────────────────────────────────────────────────
 
@@ -65,13 +101,30 @@ export function FileUpload({
     try {
       const vaultKey = getVaultKey();
 
-      // Generate a fresh file key, wrapped with the vault key
+      // Step 1: compute SHA-256 hash of the raw plaintext bytes
+      const rawBuffer = await file.arrayBuffer();
+      const hash      = await computeSha256(rawBuffer);
+
+      // Step 2: scan the hash against VirusTotal (hash only — never sends file)
+      setUploadStage('scanning');
+      const scanResult = await scanFile(hash);
+
+      if (scanResult.status === 'INFECTED') {
+        setUploadError(
+          `Malware detected: ${scanResult.detections} / ${scanResult.totalEngines} ` +
+          `security engines flagged this file. Upload blocked.`,
+        );
+        return;
+      }
+
+      // Step 3: encrypt and upload
+      setUploadStage('encrypting');
       const { fileKey, encryptedFileKey } = createFileKey(vaultKey);
 
       let encryptedBlob: Blob;
       let encryptedMetadata: string;
       try {
-        const result = await encryptFile(fileKey, file);
+        const result  = await encryptFile(fileKey, file);
         encryptedBlob     = result.encryptedBlob;
         encryptedMetadata = result.encryptedMetadata;
       } finally {
@@ -82,6 +135,9 @@ export function FileUpload({
       form.append('file',              encryptedBlob, 'encrypted');
       form.append('encryptedFileKey',  encryptedFileKey);
       form.append('encryptedMetadata', encryptedMetadata);
+      form.append('scanStatus',        scanResult.status);
+      form.append('scanDetections',    String(scanResult.detections));
+      form.append('scanTotalEngines',  String(scanResult.totalEngines));
       if (vaultItemId) form.append('vaultItemId', vaultItemId);
 
       const res = await fetch('/api/vault/files', {
@@ -92,12 +148,11 @@ export function FileUpload({
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.error ?? 'Upload failed');
+        throw new Error((err as { error?: string }).error ?? 'Upload failed');
       }
 
       const { data } = await res.json();
 
-      // Build a VaultFileInfo by decrypting the metadata for display
       const fileInfo: VaultFileInfo = {
         id:            data.file.id,
         metadata: {
@@ -105,8 +160,11 @@ export function FileUpload({
           mimeType:     file.type || 'application/octet-stream',
           originalSize: file.size,
         },
-        encryptedSize: data.file.encryptedSize,
-        createdAt:     new Date(data.file.createdAt),
+        encryptedSize:    data.file.encryptedSize,
+        scanStatus:       (data.file.scanStatus as ScanStatus) ?? scanResult.status,
+        scanDetections:   data.file.scanDetections ?? scanResult.detections,
+        scanTotalEngines: data.file.scanTotalEngines ?? scanResult.totalEngines,
+        createdAt:        new Date(data.file.createdAt),
       };
 
       onFileUploaded?.(fileInfo);
@@ -114,6 +172,7 @@ export function FileUpload({
       setUploadError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
       setIsUploading(false);
+      setUploadStage(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -140,12 +199,10 @@ export function FileUpload({
       const res = await fetch(`/api/vault/files/${fileId}`, { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
 
-      // Encrypted keys come back in response headers
       const encryptedFileKey  = res.headers.get('X-Encrypted-File-Key');
       const encryptedMetadata = res.headers.get('X-Encrypted-Metadata');
       if (!encryptedFileKey || !encryptedMetadata) throw new Error('Missing encryption headers');
 
-      // Unwrap the file key and decrypt the content
       const fileKey = unwrapFileKey(vaultKey, encryptedFileKey);
       const encryptedData = await res.arrayBuffer();
 
@@ -156,7 +213,6 @@ export function FileUpload({
         fileKey.fill(0);
       }
 
-      // Trigger browser download
       const url = URL.createObjectURL(decryptedFile);
       const a   = document.createElement('a');
       a.href     = url;
@@ -164,7 +220,8 @@ export function FileUpload({
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error('[FileUpload] Download failed:', err);
+      // Surface download failures visibly
+      setUploadError(err instanceof Error ? err.message : 'Download failed');
     } finally {
       setDownloadingId(null);
     }
@@ -183,11 +240,18 @@ export function FileUpload({
       if (!res.ok) throw new Error('Delete failed');
       onFileDeleted?.(fileId);
     } catch (err) {
-      console.error('[FileUpload] Delete failed:', err);
+      setUploadError(err instanceof Error ? err.message : 'Delete failed');
     } finally {
       setDeletingId(null);
     }
   };
+
+  // ── Upload stage label ─────────────────────────────────────────────────────
+
+  const stageLabel =
+    uploadStage === 'scanning'   ? 'Scanning for malware…' :
+    uploadStage === 'encrypting' ? 'Encrypting and uploading…' :
+    'Processing…';
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -209,6 +273,11 @@ export function FileUpload({
                 <span className="text-xs text-aegis-muted flex-shrink-0">
                   {formatFileSize(file.metadata.originalSize)}
                 </span>
+                <ScanBadge
+                  status={file.scanStatus}
+                  detections={file.scanDetections}
+                  totalEngines={file.scanTotalEngines}
+                />
               </div>
               <div className="flex items-center gap-1 flex-shrink-0">
                 <button
@@ -260,7 +329,7 @@ export function FileUpload({
           {isUploading ? (
             <>
               <Loader2 className="w-5 h-5 text-aegis-accent animate-spin" />
-              <p className="text-xs text-aegis-muted">Encrypting and uploading…</p>
+              <p className="text-xs text-aegis-muted">{stageLabel}</p>
             </>
           ) : (
             <>
@@ -268,7 +337,10 @@ export function FileUpload({
               <p className="text-xs text-aegis-subtle">
                 Drop a file or <span className="text-aegis-accent">browse</span>
               </p>
-              <p className="text-xs text-aegis-muted">Encrypted before upload · Max 50 MB</p>
+              <div className="flex items-center gap-1 text-xs text-aegis-muted">
+                <ShieldCheck className="w-3 h-3" />
+                <span>Scanned · Encrypted before upload · Max 50 MB</span>
+              </div>
             </>
           )}
         </div>

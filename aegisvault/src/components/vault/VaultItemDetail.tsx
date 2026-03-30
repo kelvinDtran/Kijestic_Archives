@@ -133,8 +133,8 @@ export function VaultItemDetail({ item, onClose, onEdit, onDelete }: VaultItemDe
               Recovery Codes ({data.recoveryCodes.length})
             </label>
             <div className="grid grid-cols-2 gap-2">
-              {data.recoveryCodes.map((code, i) => (
-                <SecretField key={i} value={code} autoHideAfterSeconds={30} />
+              {data.recoveryCodes.map((code) => (
+                <SecretField key={code} value={code} autoHideAfterSeconds={30} />
               ))}
             </div>
           </div>

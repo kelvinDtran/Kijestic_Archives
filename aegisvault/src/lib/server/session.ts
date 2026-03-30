@@ -8,6 +8,7 @@
  *   - Absolute expiry + last-used tracking
  */
 
+import { createHash } from 'crypto';
 import { db } from './db';
 import {
   generateRefreshToken,
@@ -49,7 +50,7 @@ export async function createSession(opts: CreateSessionOptions): Promise<Session
 
   // Hash IP for privacy-preserving storage
   const ipHash = opts.ip
-    ? require('crypto').createHash('sha256').update(opts.ip).digest('hex')
+    ? createHash('sha256').update(opts.ip).digest('hex')
     : null;
 
   await db.session.create({

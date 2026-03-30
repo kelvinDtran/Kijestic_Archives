@@ -105,6 +105,22 @@ export async function POST(req: NextRequest) {
     credentialBackedUp,
   } = verification.registrationInfo;
 
+  // ── Derive a sensible default credential name ──────────────────────────────
+  // The caller may override this by supplying a `name` in the request body.
+  function defaultCredentialName(
+    transports: string[],
+    deviceType: string,
+  ): string {
+    if (transports.includes('hybrid')) return 'Phone / Cross-Device';
+    if (transports.includes('internal')) return 'This Device';
+    if (deviceType === 'multiDevice') return 'Synced Passkey';
+    return 'Passkey';
+  }
+
+  const resolvedName =
+    name?.trim() ||
+    defaultCredentialName(credential.transports ?? [], credentialDeviceType);
+
   // ── Store the new credential ───────────────────────────────────────────────
   const newCredential = await db.webAuthnCredential.create({
     data: {
@@ -115,7 +131,7 @@ export async function POST(req: NextRequest) {
       deviceType:   credentialDeviceType,
       backedUp:     credentialBackedUp,
       transports:   (credential.transports ?? []) as string[],
-      name:         name?.trim() || 'Passkey',
+      name:         resolvedName,
     },
     select: {
       id:          true,

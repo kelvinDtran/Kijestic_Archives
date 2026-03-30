@@ -17,6 +17,7 @@ import { db } from '@/lib/server/db';
 import { logAuditEvent, buildAuditContext } from '@/lib/server/audit';
 
 const MAX_IMPORT_ITEMS = 2000;
+const MAX_VAULT_ITEMS  = 10000;
 
 const ImportItemSchema = z.object({
   itemType:         z.enum(['PASSWORD','API_KEY','CRYPTO','NOTE','DOCUMENT','RECOVERY_CODE','IMAGE','OTHER']),
@@ -50,6 +51,18 @@ export async function POST(req: NextRequest) {
   }
 
   const { items } = parsed.data;
+
+  // Enforce per-user vault item cap before any DB writes
+  const existingCount = await db.vaultItem.count({ where: { userId: auth.sub } });
+  if (existingCount + items.length > MAX_VAULT_ITEMS) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: `Import would exceed the maximum of ${MAX_VAULT_ITEMS} vault items. You currently have ${existingCount} items; this import contains ${items.length}.`,
+      },
+      { status: 400 },
+    );
+  }
 
   // Bulk-create all items in a single transaction
   await db.$transaction(

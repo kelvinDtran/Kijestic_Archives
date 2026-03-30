@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import type { ItemType } from '@/types/vault';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -30,7 +31,7 @@ export function formatRelativeTime(date: Date | string): string {
   return formatDate(date);
 }
 
-export const ITEM_TYPE_LABELS: Record<string, string> = {
+export const ITEM_TYPE_LABELS: Record<ItemType, string> = {
   PASSWORD:      'Password',
   API_KEY:       'API Key',
   CRYPTO:        'Crypto',
@@ -41,7 +42,7 @@ export const ITEM_TYPE_LABELS: Record<string, string> = {
   OTHER:         'Other',
 };
 
-export const ITEM_TYPE_ICONS: Record<string, string> = {
+export const ITEM_TYPE_ICONS: Record<ItemType, string> = {
   PASSWORD:      '🔑',
   API_KEY:       '🗝️',
   CRYPTO:        '₿',

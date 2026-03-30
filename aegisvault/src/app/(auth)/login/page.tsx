@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Lock, Mail, Shield, Fingerprint, Loader2 } from 'lucide-react';
 
+type MfaType = 'totp' | 'sms' | 'email';
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail]       = useState('');
@@ -12,10 +14,15 @@ export default function LoginPage() {
   const [totpCode, setTotpCode] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [requiresMfa, setRequiresMfa]   = useState(false);
+  const [mfaType, setMfaType]           = useState<MfaType | null>(null);
+  const [mfaToken, setMfaToken]         = useState<string | null>(null);
+  const [mfaCode, setMfaCode]           = useState('');
   const [isLoading, setIsLoading]       = useState(false);
   const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
+  const [isResending, setIsResending]   = useState(false);
   const [error, setError]               = useState<string | null>(null);
   const totpRef = useRef<HTMLInputElement>(null);
+  const mfaCodeRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,13 +30,31 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
+      // SMS / Email MFA verification path
+      if (requiresMfa && (mfaType === 'sms' || mfaType === 'email')) {
+        const res = await fetch('/api/auth/mfa/verify-login', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ mfaToken, code: mfaCode }),
+          credentials: 'include',
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) throw new Error(data.error ?? 'Verification failed');
+
+        router.push('/dashboard');
+        return;
+      }
+
+      // TOTP path (and initial credential submission)
       const res = await fetch('/api/auth/login', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
           email,
           password,
-          ...(requiresMfa && { totpCode }),
+          ...(requiresMfa && mfaType === 'totp' && { totpCode }),
         }),
         credentials: 'include',
       });
@@ -38,8 +63,18 @@ export default function LoginPage() {
 
       if (!res.ok) {
         if (data.code === 'MFA_REQUIRED') {
+          const type: MfaType = data.mfaType ?? 'totp';
+          setMfaType(type);
           setRequiresMfa(true);
-          setTimeout(() => totpRef.current?.focus(), 100);
+
+          if (type === 'totp') {
+            setTimeout(() => totpRef.current?.focus(), 100);
+          } else {
+            // Server already sent the code for SMS/Email; store token for verification
+            if (data.mfaToken) setMfaToken(data.mfaToken);
+            setTimeout(() => mfaCodeRef.current?.focus(), 100);
+          }
+
           setIsLoading(false);
           return;
         }
@@ -51,6 +86,36 @@ export default function LoginPage() {
       setError(err instanceof Error ? err.message : 'Login failed');
       setIsLoading(false);
     }
+  };
+
+  const handleResendCode = async () => {
+    if (!mfaToken || isResending) return;
+    setError(null);
+    setIsResending(true);
+    try {
+      const res = await fetch('/api/auth/mfa/send-code', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ mfaToken }),
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? 'Failed to resend code');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resend code');
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  const handleBack = () => {
+    setRequiresMfa(false);
+    setMfaType(null);
+    setMfaToken(null);
+    setTotpCode('');
+    setMfaCode('');
   };
 
   const handlePasskeySignIn = async () => {
@@ -95,6 +160,114 @@ export default function LoginPage() {
     } finally {
       setIsPasskeyLoading(false);
     }
+  };
+
+  const renderMfaStep = () => {
+    if (mfaType === 'totp') {
+      return (
+        <div>
+          <label className="block text-sm text-aegis-subtle mb-1.5" htmlFor="totp">
+            Authenticator Code
+          </label>
+          <input
+            id="totp"
+            ref={totpRef}
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            value={totpCode}
+            onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            className="aegis-input text-center text-2xl tracking-[0.5em] font-mono"
+            placeholder="000000"
+            maxLength={6}
+            required
+          />
+          <p className="text-xs text-aegis-muted mt-1.5">
+            Enter the 6-digit code from your authenticator app
+          </p>
+        </div>
+      );
+    }
+
+    if (mfaType === 'sms') {
+      return (
+        <div>
+          <label className="block text-sm text-aegis-subtle mb-1.5" htmlFor="mfa-code">
+            SMS Verification Code
+          </label>
+          <input
+            id="mfa-code"
+            ref={mfaCodeRef}
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            value={mfaCode}
+            onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            className="aegis-input text-center text-2xl tracking-[0.5em] font-mono"
+            placeholder="000000"
+            maxLength={6}
+            required
+          />
+          <p className="text-xs text-aegis-muted mt-1.5">
+            A 6-digit code was sent to your phone. Enter it below.
+          </p>
+          <button
+            type="button"
+            onClick={handleResendCode}
+            disabled={isResending}
+            className="mt-2 text-xs text-aegis-primary hover:underline disabled:opacity-50"
+          >
+            {isResending ? 'Sending…' : 'Resend code'}
+          </button>
+        </div>
+      );
+    }
+
+    if (mfaType === 'email') {
+      return (
+        <div>
+          <label className="block text-sm text-aegis-subtle mb-1.5" htmlFor="mfa-code">
+            Email Verification Code
+          </label>
+          <input
+            id="mfa-code"
+            ref={mfaCodeRef}
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            value={mfaCode}
+            onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            className="aegis-input text-center text-2xl tracking-[0.5em] font-mono"
+            placeholder="000000"
+            maxLength={6}
+            required
+          />
+          <p className="text-xs text-aegis-muted mt-1.5">
+            A 6-digit code was sent to your email. Enter it below.
+          </p>
+          <button
+            type="button"
+            onClick={handleResendCode}
+            disabled={isResending}
+            className="mt-2 text-xs text-aegis-primary hover:underline disabled:opacity-50"
+          >
+            {isResending ? 'Sending…' : 'Resend code'}
+          </button>
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  const submitLabel = () => {
+    if (!requiresMfa) return 'Sign In';
+    return 'Verify Code';
+  };
+
+  const submitLoadingLabel = () => {
+    if (!requiresMfa) return 'Signing in…';
+    return 'Verifying…';
   };
 
   return (
@@ -162,45 +335,24 @@ export default function LoginPage() {
             </div>
           </>
         ) : (
-          /* MFA Code Input */
-          <div>
-            <label className="block text-sm text-aegis-subtle mb-1.5" htmlFor="totp">
-              Authenticator Code
-            </label>
-            <input
-              id="totp"
-              ref={totpRef}
-              type="text"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              value={totpCode}
-              onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              className="aegis-input text-center text-2xl tracking-[0.5em] font-mono"
-              placeholder="000000"
-              maxLength={6}
-              required
-            />
-            <p className="text-xs text-aegis-muted mt-1.5">
-              Enter the 6-digit code from your authenticator app
-            </p>
-          </div>
+          renderMfaStep()
         )}
 
         <button type="submit" disabled={isLoading} className="aegis-btn-primary w-full mt-2">
           {isLoading ? (
             <span className="flex items-center justify-center gap-2">
               <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              {requiresMfa ? 'Verifying…' : 'Signing in…'}
+              {submitLoadingLabel()}
             </span>
           ) : (
-            requiresMfa ? 'Verify Code' : 'Sign In'
+            submitLabel()
           )}
         </button>
 
         {requiresMfa && (
           <button
             type="button"
-            onClick={() => { setRequiresMfa(false); setTotpCode(''); }}
+            onClick={handleBack}
             className="aegis-btn-ghost w-full text-center text-sm"
           >
             ← Back
