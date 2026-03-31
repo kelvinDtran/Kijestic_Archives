@@ -1,7 +1,45 @@
 {
   "permissions": {
     "allow": [
-      "Bash(find 'C:\\\\Users\\\\Kelvin Tran\\\\Documents\\\\Kijestic_Archives\\\\aegisvault\\\\src' -type f -name *.ts -o -name *.tsx)"
+      "Bash(find 'C:\\\\Users\\\\Kelvin Tran\\\\Documents\\\\Kijestic_Archives\\\\aegisvault\\\\src' -type f -name *.ts -o -name *.tsx)",
+      "Bash(gh auth:*)",
+      "Bash(where gh:*)",
+      "Bash(winget list:*)",
+      "Bash(cmd /c \"where gh\" 2>&1)",
+      "Bash(cmd /c \"where gh 2>&1\")",
+      "Read(//c/Program Files/GitHub CLI//**)",
+      "Read(//c/Users/Kelvin Tran/AppData/Local/GitHub/**)",
+      "Read(//c/Users/Kelvin Tran/**)",
+      "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" auth status 2>&1)",
+      "Bash(echo:*)",
+      "mcp__github__search_repositories",
+      "mcp__context7__resolve-library-id",
+      "mcp__claude_ai_Google_Calendar__gcal_list_calendars",
+      "mcp__claude_ai_Gmail__gmail_get_profile",
+      "mcp__claude_ai_Airtable__ping",
+      "Bash(cd /c/Users/Kelvin Tran/Documents/Kijestic_Archives/aegisvault)",
+      "Bash(xargs ls:*)",
+      "Bash(find 'C:/Users/Kelvin Tran/Documents/Kijestic_Archives/aegisvault/src/lib' -name *.ts)",
+      "Bash(npm run:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx prisma:*)",
+      "Bash(./node_modules/.bin/prisma migrate:*)",
+      "Bash(npx --no prisma@5.22.0 migrate dev --name add_file_scan_status --create-only)",
+      "Bash(node -e \"const pkg = require\\(''./package.json''\\); console.log\\(JSON.stringify\\(Object.keys\\({...pkg.dependencies,...\\(pkg.devDependencies||{}\\)}\\), null, 2\\)\\)\")",
+      "Bash(node -e \"const t = require\\(''twilio''\\); console.log\\(typeof t, typeof t.default\\)\")",
+      "Bash(cmd /c \"dir /b \\\\\"C:\\\\Users\\\\Kelvin Tran\\\\Documents\\\\Kijestic_Archives\\\\aegisvault\\\\node_modules\\\\\" 2>&1 | head -20\")",
+      "Bash(cmd /c \"dir /b \\\\\"C:\\\\Users\\\\Kelvin Tran\\\\Documents\\\\Kijestic_Archives\\\\aegisvault\\\\node_modules\\\\twilio\\\\\" 2>&1\")",
+      "Bash(cmd /c \"type \"\"C:\\\\Users\\\\Kelvin Tran\\\\Documents\\\\Kijestic_Archives\\\\aegisvault\\\\node_modules\\\\twilio\\\\package.json\"\" 2>&1 | head -20\")",
+      "Bash(cmd /c \"type \\\\\"C:\\\\Users\\\\Kelvin Tran\\\\Documents\\\\Kijestic_Archives\\\\aegisvault\\\\package.json\\\\\"\")",
+      "Bash(ls:*)",
+      "Bash(node -e \":*)",
+      "Bash(rm \"src/lib/auth/sms-otp.ts\")",
+      "Bash(rm -rf \"src/app/api/auth/mfa/sms\")",
+      "Bash(grep -n \"process.env.JWT_ACCESS_SECRET\\\\|process.env.SERVER_ENCRYPTION_KEY\\\\|process.env.RESEND_API_KEY\\\\|process.env.TELEGRAM_BOT_TOKEN\" /c/Users/Kelvin Tran/Documents/Kijestic_Archives/aegisvault/src/lib/auth/*.ts)",
+      "Bash(grep -n \"throw new Error.*not set\" src/lib/auth/*.ts src/lib/server/*.ts)",
+      "Bash(grep \"^export async function\" src/app/api/vault/items/[id]/route.ts)",
+      "Bash(cat:*)",
+      "Bash(head:*)"
     ]
   }
 }
