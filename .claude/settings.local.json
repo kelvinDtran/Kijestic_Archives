@@ -39,7 +39,9 @@
       "Bash(grep -n \"throw new Error.*not set\" src/lib/auth/*.ts src/lib/server/*.ts)",
       "Bash(grep \"^export async function\" src/app/api/vault/items/[id]/route.ts)",
       "Bash(cat:*)",
-      "Bash(head:*)"
+      "Bash(head:*)",
+      "Bash(gh repo:*)",
+      "Bash(gh org:*)"
     ]
   }
 }
