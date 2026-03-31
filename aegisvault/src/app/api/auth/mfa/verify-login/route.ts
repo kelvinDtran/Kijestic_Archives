@@ -1,16 +1,16 @@
 /**
  * POST /api/auth/mfa/verify-login
  *
- * Completes login for users whose MFA method is SMS or Email OTP.
+ * Completes login for users whose MFA method is Telegram or Email OTP.
  *
  * Flow:
  *   1. Verify the short-lived mfaToken issued by POST /api/auth/login
- *   2. Verify the OTP code the user submitted (SMS or Email)
+ *   2. Verify the OTP code the user submitted (Telegram or Email)
  *   3. Create a full session → set httpOnly cookies
  *   4. Return the authenticated user info
  *
  * The mfaToken is a 15-minute HS256 JWT with:
- *   { sub: userId, mfaType: 'sms' | 'email', purpose: 'mfa-challenge' }
+ *   { sub: userId, mfaType: 'telegram' | 'email', purpose: 'mfa-challenge' }
  *
  * No authentication cookie is required — the user is not yet logged in.
  */
@@ -19,7 +19,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { jwtVerify } from 'jose';
 import { z } from 'zod';
 import { db } from '@/lib/server/db';
-import { verifySmsOtp } from '@/lib/auth/sms-otp';
+import { verifyTelegramOtp } from '@/lib/auth/telegram-otp';
 import { verifyEmailOtp } from '@/lib/auth/email-otp';
 import { logAuditEvent } from '@/lib/server/audit';
 import { enforceRateLimit, getClientIp } from '@/lib/server/rate-limit';
@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (payload['mfaType'] !== 'sms' && payload['mfaType'] !== 'email') {
+    if (payload['mfaType'] !== 'telegram' && payload['mfaType'] !== 'email') {
       return NextResponse.json(
         { success: false, error: 'Invalid MFA token' },
         { status: 401 },
@@ -107,8 +107,8 @@ export async function POST(req: NextRequest) {
 
   // ── Verify OTP code ────────────────────────────────────────────────────────
   const isValid =
-    mfaType === 'sms'
-      ? await verifySmsOtp(userId, code)
+    mfaType === 'telegram'
+      ? await verifyTelegramOtp(userId, code)
       : await verifyEmailOtp(userId, code);
 
   if (!isValid) {

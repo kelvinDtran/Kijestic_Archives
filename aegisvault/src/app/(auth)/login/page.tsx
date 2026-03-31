@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Lock, Mail, Shield, Fingerprint, Loader2 } from 'lucide-react';
 
-type MfaType = 'totp' | 'sms' | 'email';
+type MfaType = 'totp' | 'telegram' | 'email';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -30,8 +30,8 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      // SMS / Email MFA verification path
-      if (requiresMfa && (mfaType === 'sms' || mfaType === 'email')) {
+      // Telegram / Email MFA verification path
+      if (requiresMfa && (mfaType === 'telegram' || mfaType === 'email')) {
         const res = await fetch('/api/auth/mfa/verify-login', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -70,7 +70,7 @@ export default function LoginPage() {
           if (type === 'totp') {
             setTimeout(() => totpRef.current?.focus(), 100);
           } else {
-            // Server already sent the code for SMS/Email; store token for verification
+            // Server already sent the code for Telegram/Email; store token for verification
             if (data.mfaToken) setMfaToken(data.mfaToken);
             setTimeout(() => mfaCodeRef.current?.focus(), 100);
           }
@@ -189,11 +189,11 @@ export default function LoginPage() {
       );
     }
 
-    if (mfaType === 'sms') {
+    if (mfaType === 'telegram') {
       return (
         <div>
           <label className="block text-sm text-aegis-subtle mb-1.5" htmlFor="mfa-code">
-            SMS Verification Code
+            Telegram Verification Code
           </label>
           <input
             id="mfa-code"
@@ -209,7 +209,7 @@ export default function LoginPage() {
             required
           />
           <p className="text-xs text-aegis-muted mt-1.5">
-            A 6-digit code was sent to your phone. Enter it below.
+            A 6-digit code was sent to your Telegram. Enter it below.
           </p>
           <button
             type="button"
@@ -217,7 +217,7 @@ export default function LoginPage() {
             disabled={isResending}
             className="mt-2 text-xs text-aegis-primary hover:underline disabled:opacity-50"
           >
-            {isResending ? 'Sending…' : 'Resend code'}
+            {isResending ? 'Sending…' : 'Resend to Telegram'}
           </button>
         </div>
       );

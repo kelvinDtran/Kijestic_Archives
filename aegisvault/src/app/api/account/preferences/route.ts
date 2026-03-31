@@ -17,8 +17,7 @@ export async function GET(_req: NextRequest) {
     select: {
       lockTimeout:      true,
       totpEnabled:      true,
-      smsEnabled:       true,
-      phoneNumber:      true,
+      telegramEnabled:  true,
       emailMfaEnabled:  true,
     },
   });
@@ -28,11 +27,10 @@ export async function GET(_req: NextRequest) {
   return NextResponse.json({
     success: true,
     data: {
-      lockTimeout:     user.lockTimeout,
-      totpEnabled:     user.totpEnabled,
-      smsEnabled:      user.smsEnabled,
-      phoneNumber:     user.phoneNumber,
-      emailMfaEnabled: user.emailMfaEnabled,
+      lockTimeout:      user.lockTimeout,
+      totpEnabled:      user.totpEnabled,
+      telegramEnabled:  user.telegramEnabled,
+      emailMfaEnabled:  user.emailMfaEnabled,
     },
   });
 }

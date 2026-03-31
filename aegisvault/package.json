@@ -41,13 +41,11 @@
     "react-hook-form": "^7.54.0",
     "resend": "^4.0.0",
     "tailwind-merge": "^2.5.5",
-    "twilio": "^5.3.0",
     "uuid": "^11.0.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
-    "@types/twilio": "^3.19.3",
     "@types/node": "^22.10.0",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.17",

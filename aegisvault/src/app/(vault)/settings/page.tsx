@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Shield, Clock, Key, Download, Upload, Trash2, CheckCircle2, AlertTriangle, Loader2, Fingerprint, Plus, Pencil, Smartphone, Phone, Mail } from 'lucide-react';
+import { Shield, Clock, Key, Download, Upload, Trash2, CheckCircle2, AlertTriangle, Loader2, Fingerprint, Plus, Pencil, Smartphone, Mail, Send } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { useVault } from '@/contexts/VaultContext';
 import {
@@ -42,19 +42,18 @@ export default function SettingsPage() {
   const [renameValue, setRenameValue] = useState('');
   const [isSavingRename, setIsSavingRename] = useState(false);
 
-  // SMS MFA state
-  const [smsEnabled, setSmsEnabled] = useState(false);
-  const [phoneNumber, setPhoneNumber] = useState<string | null>(null);
-  const [smsStep, setSmsStep] = useState<'idle' | 'verify'>('idle');
-  const [smsPhoneInput, setSmsPhoneInput] = useState('');
-  const [smsCodeInput, setSmsCodeInput] = useState('');
-  const [isSendingCode, setIsSendingCode] = useState(false);
-  const [isVerifyingSms, setIsVerifyingSms] = useState(false);
-  const [isDisablingSms, setIsDisablingSms] = useState(false);
-  const [smsDisableCode, setSmsDisableCode] = useState('');
-  const [showSmsDisableForm, setShowSmsDisableForm] = useState(false);
-  const [smsError, setSmsError] = useState<string | null>(null);
-  const [smsSuccess, setSmsSuccess] = useState<string | null>(null);
+  // Telegram MFA state
+  const [telegramEnabled, setTelegramEnabled] = useState(false);
+  const [telegramStep, setTelegramStep] = useState<'idle' | 'linking' | 'linked'>('idle');
+  const [telegramDeepLink, setTelegramDeepLink] = useState<string | null>(null);
+  const [telegramLinkCode, setTelegramLinkCode] = useState<string | null>(null);
+  const [isRequestingLink, setIsRequestingLink] = useState(false);
+  const [isDisablingTelegram, setIsDisablingTelegram] = useState(false);
+  const [telegramDisableCode, setTelegramDisableCode] = useState('');
+  const [showTelegramDisableForm, setShowTelegramDisableForm] = useState(false);
+  const [telegramError, setTelegramError] = useState<string | null>(null);
+  const [telegramSuccess, setTelegramSuccess] = useState<string | null>(null);
+  const telegramPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Email MFA state
   const [emailMfaEnabled, setEmailMfaEnabled] = useState(false);
@@ -165,8 +164,7 @@ export default function SettingsPage() {
         if (d.success) {
           setLockTimeout(d.data.lockTimeout ?? 300);
           setMfaEnabled(d.data.totpEnabled ?? false);
-          setSmsEnabled(d.data.smsEnabled ?? false);
-          setPhoneNumber(d.data.phoneNumber ?? null);
+          setTelegramEnabled(d.data.telegramEnabled ?? false);
           setEmailMfaEnabled(d.data.emailMfaEnabled ?? false);
         }
       })
@@ -281,99 +279,96 @@ export default function SettingsPage() {
     }
   };
 
-  // ── SMS MFA ───────────────────────────────────────────────────────────────
+  // ── Telegram MFA ──────────────────────────────────────────────────────────
 
-  const maskPhone = (num: string) => {
-    // E.164: keep country code prefix and last 4 digits, mask the rest
-    const cleaned = num.replace(/\s/g, '');
-    if (cleaned.length <= 5) return cleaned;
-    const prefix = cleaned.slice(0, cleaned.indexOf(' ') !== -1 ? cleaned.indexOf(' ') : 2);
-    const last4 = cleaned.slice(-4);
-    return `${prefix} *** *** ${last4}`;
-  };
-
-  const sendSmsCode = async () => {
-    setSmsError(null);
-    if (!smsPhoneInput.trim()) {
-      setSmsError('Please enter a phone number in E.164 format (e.g. +16025551234)');
-      return;
-    }
-    setIsSendingCode(true);
+  const startTelegramLink = async () => {
+    setTelegramError(null);
+    setIsRequestingLink(true);
     try {
-      const res = await fetch('/api/auth/mfa/sms/setup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phoneNumber: smsPhoneInput.trim() }),
+      const res = await fetch('/api/auth/mfa/telegram/link', {
+        method:      'POST',
         credentials: 'include',
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? 'Failed to send verification code');
-      setSmsStep('verify');
+      if (!res.ok) throw new Error(json.error ?? 'Failed to generate link code');
+      setTelegramDeepLink(json.data.deepLink);
+      setTelegramLinkCode(json.data.linkCode);
+      setTelegramStep('linking');
+
+      // Start polling for link completion
+      telegramPollingRef.current = setInterval(async () => {
+        try {
+          const statusRes = await fetch('/api/auth/mfa/telegram/status', { credentials: 'include' });
+          const statusJson = await statusRes.json();
+          if (statusJson.data?.linked) {
+            if (telegramPollingRef.current) {
+              clearInterval(telegramPollingRef.current);
+              telegramPollingRef.current = null;
+            }
+            setTelegramEnabled(true);
+            setTelegramStep('linked');
+            setTelegramSuccess('Telegram MFA enabled successfully');
+            setTimeout(() => setTelegramSuccess(null), 3000);
+          }
+        } catch {
+          // Non-critical polling error — keep trying
+        }
+      }, 2000);
     } catch (err) {
-      setSmsError(err instanceof Error ? err.message : 'Failed to send verification code');
+      setTelegramError(err instanceof Error ? err.message : 'Failed to generate link code');
     } finally {
-      setIsSendingCode(false);
+      setIsRequestingLink(false);
     }
   };
 
-  const verifySmsCode = async () => {
-    setSmsError(null);
-    if (!smsCodeInput.trim()) {
-      setSmsError('Please enter the 6-digit code');
+  const cancelTelegramLink = () => {
+    if (telegramPollingRef.current) {
+      clearInterval(telegramPollingRef.current);
+      telegramPollingRef.current = null;
+    }
+    setTelegramStep('idle');
+    setTelegramDeepLink(null);
+    setTelegramLinkCode(null);
+    setTelegramError(null);
+  };
+
+  const disableTelegram = async () => {
+    setTelegramError(null);
+    if (!telegramDisableCode.trim()) {
+      setTelegramError('Please enter your current Telegram code or password to disable');
       return;
     }
-    setIsVerifyingSms(true);
+    setIsDisablingTelegram(true);
     try {
-      const res = await fetch('/api/auth/mfa/sms/verify', {
-        method: 'POST',
+      const res = await fetch('/api/auth/mfa/telegram/setup', {
+        method:  'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: smsCodeInput.trim() }),
+        body:    JSON.stringify({ code: telegramDisableCode.trim() }),
         credentials: 'include',
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? 'Verification failed');
-      setSmsEnabled(true);
-      setPhoneNumber(smsPhoneInput.trim());
-      setSmsStep('idle');
-      setSmsPhoneInput('');
-      setSmsCodeInput('');
-      setSmsSuccess('SMS MFA enabled successfully');
-      setTimeout(() => setSmsSuccess(null), 3000);
+      if (!res.ok) throw new Error(json.error ?? 'Failed to disable Telegram MFA');
+      setTelegramEnabled(false);
+      setTelegramStep('idle');
+      setShowTelegramDisableForm(false);
+      setTelegramDisableCode('');
+      setTelegramSuccess('Telegram MFA disabled');
+      setTimeout(() => setTelegramSuccess(null), 3000);
     } catch (err) {
-      setSmsError(err instanceof Error ? err.message : 'Verification failed');
+      setTelegramError(err instanceof Error ? err.message : 'Failed to disable Telegram MFA');
     } finally {
-      setIsVerifyingSms(false);
+      setIsDisablingTelegram(false);
     }
   };
 
-  const disableSms = async () => {
-    setSmsError(null);
-    if (!smsDisableCode.trim()) {
-      setSmsError('Please enter your current SMS code or password to disable');
-      return;
-    }
-    setIsDisablingSms(true);
-    try {
-      const res = await fetch('/api/auth/mfa/sms/setup', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: smsDisableCode.trim() }),
-        credentials: 'include',
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? 'Failed to disable SMS MFA');
-      setSmsEnabled(false);
-      setPhoneNumber(null);
-      setShowSmsDisableForm(false);
-      setSmsDisableCode('');
-      setSmsSuccess('SMS MFA disabled');
-      setTimeout(() => setSmsSuccess(null), 3000);
-    } catch (err) {
-      setSmsError(err instanceof Error ? err.message : 'Failed to disable SMS MFA');
-    } finally {
-      setIsDisablingSms(false);
-    }
-  };
+  // Clean up polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (telegramPollingRef.current) {
+        clearInterval(telegramPollingRef.current);
+      }
+    };
+  }, []);
 
   // ── Email MFA ─────────────────────────────────────────────────────────────
 
@@ -523,59 +518,61 @@ export default function SettingsPage() {
         )}
       </section>
 
-      {/* SMS MFA */}
+      {/* Telegram MFA */}
       <section className="aegis-card space-y-4">
         <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
-          <Phone className="w-4 h-4 text-aegis-muted" /> SMS Two-Factor Authentication
+          <Send className="w-4 h-4 text-aegis-muted" /> Telegram Two-Factor Authentication
         </h2>
 
-        {smsError && (
+        {telegramError && (
           <div className="flex items-center gap-2 text-xs text-aegis-danger bg-aegis-danger-muted border border-aegis-danger/30 rounded-lg px-3 py-2">
-            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" /> {smsError}
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" /> {telegramError}
           </div>
         )}
-        {smsSuccess && (
+        {telegramSuccess && (
           <div className="flex items-center gap-2 text-xs text-aegis-success bg-aegis-success-muted border border-aegis-success/30 rounded-lg px-3 py-2">
-            <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" /> {smsSuccess}
+            <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" /> {telegramSuccess}
           </div>
         )}
 
-        {smsEnabled && phoneNumber ? (
+        {telegramEnabled ? (
           <>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-aegis-subtle">SMS MFA: Enabled</p>
-                <p className="text-xs text-aegis-muted mt-0.5">{maskPhone(phoneNumber)}</p>
+                <p className="text-sm text-aegis-subtle">Telegram MFA: Enabled</p>
+                <p className="text-xs text-aegis-muted mt-0.5">
+                  Login codes will be delivered to your Telegram
+                </p>
               </div>
               <div className="text-xs px-2 py-1 rounded-full border bg-aegis-success-muted border-aegis-success text-aegis-success">
                 Enabled
               </div>
             </div>
 
-            {showSmsDisableForm ? (
+            {showTelegramDisableForm ? (
               <div className="space-y-2">
                 <p className="text-xs text-aegis-muted">
-                  Enter your current SMS code or account password to disable SMS MFA:
+                  Enter your current Telegram code or account password to disable Telegram MFA:
                 </p>
                 <input
                   type="text"
-                  value={smsDisableCode}
-                  onChange={(e) => setSmsDisableCode(e.target.value)}
+                  value={telegramDisableCode}
+                  onChange={(e) => setTelegramDisableCode(e.target.value)}
                   placeholder="Code or password"
                   maxLength={128}
                   className="aegis-input text-sm w-full max-w-xs"
                 />
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={disableSms}
-                    disabled={isDisablingSms}
+                    onClick={disableTelegram}
+                    disabled={isDisablingTelegram}
                     className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted flex items-center gap-2"
                   >
-                    {isDisablingSms ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    {isDisablingTelegram ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                     Confirm Disable
                   </button>
                   <button
-                    onClick={() => { setShowSmsDisableForm(false); setSmsDisableCode(''); setSmsError(null); }}
+                    onClick={() => { setShowTelegramDisableForm(false); setTelegramDisableCode(''); setTelegramError(null); }}
                     className="text-xs text-aegis-muted hover:text-aegis-text"
                   >
                     Cancel
@@ -584,68 +581,65 @@ export default function SettingsPage() {
               </div>
             ) : (
               <button
-                onClick={() => setShowSmsDisableForm(true)}
+                onClick={() => setShowTelegramDisableForm(true)}
                 className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted"
               >
-                Disable SMS MFA
+                Disable Telegram MFA
               </button>
             )}
           </>
-        ) : smsStep === 'verify' ? (
+        ) : telegramStep === 'linking' && telegramDeepLink ? (
           <div className="space-y-3">
             <p className="text-sm text-aegis-subtle">
-              A 6-digit code was sent to <span className="text-aegis-text font-medium">{smsPhoneInput}</span>.
-              Enter it below to activate SMS MFA.
+              Complete the setup in Telegram:
             </p>
-            <input
-              type="text"
-              value={smsCodeInput}
-              onChange={(e) => setSmsCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder="123456"
-              maxLength={6}
-              className="aegis-input text-sm w-40 tracking-widest text-center"
-            />
-            <div className="flex items-center gap-2">
-              <button
-                onClick={verifySmsCode}
-                disabled={isVerifyingSms || smsCodeInput.length !== 6}
-                className="aegis-btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
-              >
-                {isVerifyingSms ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                Verify
-              </button>
-              <button
-                onClick={() => { setSmsStep('idle'); setSmsCodeInput(''); setSmsError(null); }}
-                className="text-xs text-aegis-muted hover:text-aegis-text"
-              >
-                Cancel
-              </button>
+            <ol className="space-y-2 text-sm text-aegis-muted list-decimal list-inside">
+              <li>Tap the button below to open Telegram:</li>
+            </ol>
+            <a
+              href={telegramDeepLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="aegis-btn-primary text-sm inline-flex items-center gap-2"
+            >
+              <Send className="w-4 h-4" /> Open in Telegram
+            </a>
+            <p className="text-xs text-aegis-muted">2. Send the message and return here.</p>
+            <div className="flex items-center gap-2 text-xs text-aegis-muted">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>Checking for confirmation…</span>
             </div>
+            {telegramLinkCode && (
+              <p className="text-xs text-aegis-muted">
+                Or copy the link code:{' '}
+                <code className="font-mono bg-aegis-elevated px-1 py-0.5 rounded text-aegis-subtle">
+                  {telegramLinkCode}
+                </code>
+              </p>
+            )}
+            <button
+              onClick={cancelTelegramLink}
+              className="text-xs text-aegis-muted hover:text-aegis-text"
+            >
+              Cancel
+            </button>
           </div>
         ) : (
           <div className="space-y-3">
             <div>
-              <p className="text-sm text-aegis-subtle">Add Phone Number</p>
+              <p className="text-sm text-aegis-subtle">Enable via Telegram</p>
               <p className="text-xs text-aegis-muted mt-0.5">
-                Enter your number in E.164 format (e.g. +16025551234)
+                Receive login codes via Telegram — free, instant, no phone number needed.
               </p>
             </div>
-            <input
-              type="tel"
-              value={smsPhoneInput}
-              onChange={(e) => setSmsPhoneInput(e.target.value)}
-              placeholder="+16025551234"
-              maxLength={20}
-              className="aegis-input text-sm w-64"
-            />
             <button
-              onClick={sendSmsCode}
-              disabled={isSendingCode || !smsPhoneInput.trim()}
+              onClick={startTelegramLink}
+              disabled={isRequestingLink}
               className="aegis-btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
             >
-              {isSendingCode
-                ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending…</>
-                : <><Phone className="w-4 h-4" /> Send Verification Code</>}
+              {isRequestingLink
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating link…</>
+                : <><Send className="w-4 h-4" /> Enable via Telegram</>}
             </button>
           </div>
         )}

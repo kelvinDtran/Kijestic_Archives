@@ -7,11 +7,11 @@
  * Flow:
  *   1. Validate credentials
  *   2. If MFA is enabled, either verify inline (TOTP) or issue a short-lived
- *      mfaToken and return a challenge (SMS / Email OTP)
+ *      mfaToken and return a challenge (Telegram / Email OTP)
  *   3. Create session → set httpOnly cookies
  *   4. Return user info (no tokens in body — they're in cookies)
  *
- * Priority order when multiple MFA methods are enabled: TOTP > SMS > Email
+ * Priority order when multiple MFA methods are enabled: TOTP > Telegram > Email
  *
  * The vault is still "locked" after login. The client must prompt for
  * the master password separately to unlock vault decryption.
@@ -23,7 +23,7 @@ import { z } from 'zod';
 import { db } from '@/lib/server/db';
 import { verifyAccountPassword } from '@/lib/auth/password';
 import { verifyTotpCode } from '@/lib/auth/totp';
-import { sendSmsOtp } from '@/lib/auth/sms-otp';
+import { sendTelegramOtp } from '@/lib/auth/telegram-otp';
 import { sendEmailOtp } from '@/lib/auth/email-otp';
 import { logAuditEvent } from '@/lib/server/audit';
 import { enforceRateLimit, getClientIp } from '@/lib/server/rate-limit';
@@ -73,15 +73,15 @@ export async function POST(req: NextRequest) {
   const user = await db.user.findUnique({
     where:  { email },
     select: {
-      id:              true,
-      email:           true,
-      passwordHash:    true,
-      totpEnabled:     true,
-      totpSecret:      true,
-      smsEnabled:      true,
-      phoneNumber:     true,
-      emailMfaEnabled: true,
-      lockTimeout:     true,
+      id:               true,
+      email:            true,
+      passwordHash:     true,
+      totpEnabled:      true,
+      totpSecret:       true,
+      telegramEnabled:  true,
+      telegramChatId:   true,
+      emailMfaEnabled:  true,
+      lockTimeout:      true,
     },
   });
 
@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── MFA dispatch — priority order: TOTP > SMS > Email ─────────────────────
+  // ── MFA dispatch — priority order: TOTP > Telegram > Email ───────────────
 
   // TOTP: verify inline (code supplied) or signal challenge to client
   if (user.totpEnabled) {
@@ -137,18 +137,18 @@ export async function POST(req: NextRequest) {
       ...auditCtx,
       metadata: { type: 'totp' },
     });
-  } else if (user.smsEnabled) {
-    // SMS OTP: send code then return a short-lived mfaToken for the verify step
-    if (!user.phoneNumber) {
+  } else if (user.telegramEnabled) {
+    // Telegram OTP: send code then return a short-lived mfaToken for the verify step
+    if (!user.telegramChatId) {
       return NextResponse.json(
-        { success: false, error: 'SMS MFA is enabled but no phone number is configured' },
+        { success: false, error: 'Telegram MFA is enabled but no chat ID is configured' },
         { status: 500 },
       );
     }
 
-    await sendSmsOtp(user.id, user.phoneNumber);
+    await sendTelegramOtp(user.id, user.telegramChatId);
 
-    const mfaToken = await new SignJWT({ mfaType: 'sms', purpose: 'mfa-challenge' })
+    const mfaToken = await new SignJWT({ mfaType: 'telegram', purpose: 'mfa-challenge' })
       .setProtectedHeader({ alg: 'HS256' })
       .setSubject(user.id)
       .setIssuedAt()
@@ -156,7 +156,7 @@ export async function POST(req: NextRequest) {
       .sign(ACCESS_SECRET);
 
     return NextResponse.json(
-      { success: false, mfaRequired: true, mfaType: 'sms', mfaToken },
+      { success: false, mfaRequired: true, mfaType: 'telegram', mfaToken },
       { status: 401 },
     );
   } else if (user.emailMfaEnabled) {
@@ -185,7 +185,7 @@ export async function POST(req: NextRequest) {
     data:  { lastLoginAt: new Date() },
   });
 
-  const mfaUsed = user.totpEnabled || user.smsEnabled || user.emailMfaEnabled;
+  const mfaUsed = user.totpEnabled || user.telegramEnabled || user.emailMfaEnabled;
   await logAuditEvent('AUTH_LOGIN_SUCCESS', {
     userId: user.id,
     ...auditCtx,
@@ -196,12 +196,12 @@ export async function POST(req: NextRequest) {
     success: true,
     data: {
       user: {
-        id:              user.id,
-        email:           user.email,
-        totpEnabled:     user.totpEnabled,
-        smsEnabled:      user.smsEnabled,
-        emailMfaEnabled: user.emailMfaEnabled,
-        lockTimeout:     user.lockTimeout,
+        id:               user.id,
+        email:            user.email,
+        totpEnabled:      user.totpEnabled,
+        telegramEnabled:  user.telegramEnabled,
+        emailMfaEnabled:  user.emailMfaEnabled,
+        lockTimeout:      user.lockTimeout,
       },
     },
   });

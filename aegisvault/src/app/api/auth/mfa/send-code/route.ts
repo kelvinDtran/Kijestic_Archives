@@ -10,22 +10,22 @@
  *
  * Security notes:
  *   - mfaToken is a signed JWT (HS256, JWT_ACCESS_SECRET, 15 min TTL)
- *   - Payload: { sub: userId, mfaType: 'SMS' | 'EMAIL', purpose: 'mfa-challenge' }
+ *   - Payload: { sub: userId, mfaType: 'TELEGRAM' | 'EMAIL', purpose: 'mfa-challenge' }
  *   - Rate limited: 5 requests per hour per IP
- *   - Response never reveals whether a user/phone exists (uniform success message)
+ *   - Response never reveals whether a user/telegram exists (uniform success message)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { jwtVerify } from 'jose';
 import { db } from '@/lib/server/db';
-import { sendSmsOtp } from '@/lib/auth/sms-otp';
+import { sendTelegramOtp } from '@/lib/auth/telegram-otp';
 import { checkRateLimit, getClientIp } from '@/lib/server/rate-limit';
 
 // ── MFA Challenge Token ───────────────────────────────────────────────────────
 
 interface MfaChallengePayload {
   sub:      string;
-  mfaType:  'SMS' | 'EMAIL';
+  mfaType:  'TELEGRAM' | 'EMAIL';
   purpose:  string;
   exp?:     number;
   iat?:     number;
@@ -50,7 +50,7 @@ async function verifyMfaToken(token: string): Promise<MfaChallengePayload | null
       typeof payload.mfaType  !== 'string' ||
       typeof payload.purpose  !== 'string' ||
       payload.purpose !== 'mfa-challenge'  ||
-      (payload.mfaType !== 'SMS' && payload.mfaType !== 'EMAIL')
+      (payload.mfaType !== 'TELEGRAM' && payload.mfaType !== 'EMAIL')
     ) {
       return null;
     }
@@ -119,19 +119,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ success: true, message: 'Code sent' });
   }
 
-  if (mfaClaim.mfaType === 'SMS') {
+  if (mfaClaim.mfaType === 'TELEGRAM') {
     const user = await db.user.findUnique({
       where:  { id: mfaClaim.sub },
-      select: { phoneNumber: true, smsEnabled: true },
+      select: { telegramChatId: true, telegramEnabled: true },
     });
 
-    // Silently succeed if user/phone not found — caller must not learn this
-    if (user?.phoneNumber && user.smsEnabled) {
+    // Silently succeed if user/telegram not found — caller must not learn this
+    if (user?.telegramChatId && user.telegramEnabled) {
       try {
-        await sendSmsOtp(mfaClaim.sub, user.phoneNumber);
+        await sendTelegramOtp(mfaClaim.sub, user.telegramChatId);
       } catch (err) {
         // Log for observability but do not surface the error to the caller
-        console.error('[send-code] SMS delivery failed:', err);
+        console.error('[send-code] Telegram delivery failed:', err);
       }
     }
   }
