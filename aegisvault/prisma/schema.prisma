@@ -85,7 +85,6 @@ model BackupCode {
 // ── OTP Codes ─────────────────────────────────────────────────────────────────
 
 enum OtpCodeType {
-  SMS
   EMAIL
   TELEGRAM
 }
@@ -334,12 +333,13 @@ enum AuditEvent {
 // ── Rate Limiting ─────────────────────────────────────────────────────────────
 
 model RateLimitEntry {
-  id      String   @id @default(cuid())
+  id        String   @id @default(cuid())
   // Key includes action + hashed identifier to prevent enumeration
   // e.g., "login:sha256(ip)", "register:sha256(ip)"
-  key     String   @unique
-  count   Int      @default(1)
-  resetAt DateTime
+  key       String   @unique
+  count     Int      @default(1)
+  resetAt   DateTime
+  updatedAt DateTime @updatedAt
 
   @@index([key])
   @@index([resetAt])
