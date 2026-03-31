@@ -19,17 +19,8 @@ import { db } from '../server/db';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const RESEND_API_KEY   = process.env.RESEND_API_KEY;
 const RESEND_FROM_EMAIL =
   process.env.RESEND_FROM_EMAIL ?? 'AegisVault <noreply@aegisvault.app>';
-
-if (!RESEND_API_KEY && process.env.NODE_ENV !== 'test') {
-  throw new Error(
-    'RESEND_API_KEY environment variable is not set. Refusing to start.',
-  );
-}
-
-const resend = new Resend(RESEND_API_KEY ?? 'test-key-placeholder');
 
 const OTP_EXPIRY_MINUTES = 10;
 const BCRYPT_COST = 10;
@@ -63,6 +54,13 @@ function buildEmailHtml(code: string): string {
  * @param email  - The user's account email address (used as the delivery destination)
  */
 export async function sendEmailOtp(userId: string, email: string): Promise<void> {
+  const RESEND_API_KEY = process.env.RESEND_API_KEY;
+  if (!RESEND_API_KEY) {
+    throw new Error('Email MFA is not configured (RESEND_API_KEY missing)');
+  }
+
+  const resend = new Resend(RESEND_API_KEY);
+
   const plainCode = String(randomInt(100000, 999999));
   const codeHash  = await bcrypt.hash(plainCode, BCRYPT_COST);
   const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);

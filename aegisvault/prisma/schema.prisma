@@ -44,6 +44,9 @@ model User {
   // Telegram MFA
   telegramChatId  BigInt?  // Telegram chat_id (64-bit integer)
   telegramEnabled Boolean  @default(false)
+  // WhatsApp recovery (optional)
+  whatsappNumber  String?   // E.164 format e.g. +16025551234
+  whatsappEnabled Boolean   @default(false)
   // Email MFA
   emailMfaEnabled Boolean  @default(false)
 
@@ -87,6 +90,7 @@ model BackupCode {
 enum OtpCodeType {
   EMAIL
   TELEGRAM
+  WHATSAPP
 }
 
 model OtpCode {

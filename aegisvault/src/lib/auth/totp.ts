@@ -142,20 +142,19 @@ export async function verifyBackupCode(
 // This is separate from vault encryption — it's a server-side key protecting
 // a server-side secret.
 
-const SERVER_KEY = (() => {
+function getServerKey(): Buffer {
   const key = process.env.SERVER_ENCRYPTION_KEY;
-  if (!key && process.env.NODE_ENV !== 'test') {
-    throw new Error('SERVER_ENCRYPTION_KEY environment variable is not set. Refusing to start.');
+  if (!key) {
+    throw new Error('TOTP MFA is not configured (SERVER_ENCRYPTION_KEY missing)');
   }
   // Derive a 32-byte key from the env var using SHA-256
-  return createHash('sha256')
-    .update(key ?? 'insecure-test-key')
-    .digest();
-})();
+  return createHash('sha256').update(key).digest();
+}
 
 function encryptTotpSecret(plaintext: string): string {
+  const serverKey = getServerKey();
   const iv = randomBytes(12);  // 96-bit IV for AES-GCM
-  const cipher = createCipheriv('aes-256-gcm', SERVER_KEY, iv);
+  const cipher = createCipheriv('aes-256-gcm', serverKey, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
   // Format: hex(iv) + ':' + hex(tag) + ':' + hex(ciphertext)
@@ -163,13 +162,14 @@ function encryptTotpSecret(plaintext: string): string {
 }
 
 function decryptTotpSecret(ciphertext: string): string {
+  const serverKey = getServerKey();
   const parts = ciphertext.split(':');
   if (parts.length !== 3) throw new Error('Invalid encrypted TOTP secret format');
   const [ivHex, tagHex, encHex] = parts;
   const iv       = Buffer.from(ivHex,  'hex');
   const tag      = Buffer.from(tagHex, 'hex');
   const enc      = Buffer.from(encHex, 'hex');
-  const decipher = createDecipheriv('aes-256-gcm', SERVER_KEY, iv);
+  const decipher = createDecipheriv('aes-256-gcm', serverKey, iv);
   decipher.setAuthTag(tag);
   return decipher.update(enc, undefined, 'utf8') + decipher.final('utf8');
 }

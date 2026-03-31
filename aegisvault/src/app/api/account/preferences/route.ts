@@ -18,6 +18,7 @@ export async function GET(_req: NextRequest) {
       lockTimeout:      true,
       totpEnabled:      true,
       telegramEnabled:  true,
+      whatsappEnabled:  true,
       emailMfaEnabled:  true,
     },
   });
@@ -30,6 +31,7 @@ export async function GET(_req: NextRequest) {
       lockTimeout:      user.lockTimeout,
       totpEnabled:      user.totpEnabled,
       telegramEnabled:  user.telegramEnabled,
+      whatsappEnabled:  user.whatsappEnabled,
       emailMfaEnabled:  user.emailMfaEnabled,
     },
   });

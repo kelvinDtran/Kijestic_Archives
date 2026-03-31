@@ -2,16 +2,13 @@
  * POST /api/auth/login
  *
  * Authenticate a user with email + account password.
- * Optionally verifies a TOTP code if MFA is enabled.
  *
  * Flow:
  *   1. Validate credentials
- *   2. If MFA is enabled, either verify inline (TOTP) or issue a short-lived
- *      mfaToken and return a challenge (Telegram / Email OTP)
- *   3. Create session → set httpOnly cookies
+ *   2. If the user has passkeys enrolled, issue a short-lived preAuthToken
+ *      and return PASSKEY_REQUIRED (status 200 — password was correct)
+ *   3. If no passkeys, create full session → set httpOnly cookies
  *   4. Return user info (no tokens in body — they're in cookies)
- *
- * Priority order when multiple MFA methods are enabled: TOTP > Telegram > Email
  *
  * The vault is still "locked" after login. The client must prompt for
  * the master password separately to unlock vault decryption.
@@ -22,14 +19,11 @@ import { SignJWT } from 'jose';
 import { z } from 'zod';
 import { db } from '@/lib/server/db';
 import { verifyAccountPassword } from '@/lib/auth/password';
-import { verifyTotpCode } from '@/lib/auth/totp';
-import { sendTelegramOtp } from '@/lib/auth/telegram-otp';
-import { sendEmailOtp } from '@/lib/auth/email-otp';
 import { logAuditEvent } from '@/lib/server/audit';
 import { enforceRateLimit, getClientIp } from '@/lib/server/rate-limit';
 import { createSessionAndSetCookies } from '@/lib/server/session';
 
-// Shared secret used to sign short-lived MFA challenge tokens
+// Shared secret used to sign short-lived pre-auth tokens
 function loadJwtSecret(): Uint8Array {
   const secret = process.env.JWT_ACCESS_SECRET;
   if (!secret) {
@@ -43,7 +37,6 @@ const ACCESS_SECRET = loadJwtSecret();
 const LoginSchema = z.object({
   email:    z.string().email().max(254).toLowerCase().trim(),
   password: z.string().min(1).max(128),
-  totpCode: z.string().length(6).optional(),
 });
 
 // Generic error message — never reveal whether the email exists
@@ -65,7 +58,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Validation failed' }, { status: 400 });
   }
 
-  const { email, password, totpCode } = parsed.data;
+  const { email, password } = parsed.data;
   const userAgent = req.headers.get('user-agent') ?? undefined;
   const auditCtx  = { ip, userAgent };
 
@@ -76,11 +69,7 @@ export async function POST(req: NextRequest) {
       id:               true,
       email:            true,
       passwordHash:     true,
-      totpEnabled:      true,
-      totpSecret:       true,
       telegramEnabled:  true,
-      telegramChatId:   true,
-      emailMfaEnabled:  true,
       lockTimeout:      true,
     },
   });
@@ -105,78 +94,35 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── MFA dispatch — priority order: TOTP > Telegram > Email ───────────────
+  // ── Check for enrolled passkeys ────────────────────────────────────────────
+  const passkeyCount = await db.webAuthnCredential.count({
+    where: { userId: user.id },
+  });
 
-  // TOTP: verify inline (code supplied) or signal challenge to client
-  if (user.totpEnabled) {
-    if (!totpCode) {
-      // Signal to the client that TOTP MFA is required
-      return NextResponse.json(
-        { success: false, mfaRequired: true, mfaType: 'totp', error: 'MFA required', code: 'MFA_REQUIRED' },
-        { status: 401 },
-      );
-    }
-
-    if (!user.totpSecret || !verifyTotpCode(user.totpSecret, totpCode)) {
-      await logAuditEvent('AUTH_MFA_CHALLENGE_FAILED', {
-        ...auditCtx,
-        userId: user.id,
-        metadata: { type: 'totp' },
-      });
-      // Rate limit MFA failures separately
-      const mfaLimitResponse = await enforceRateLimit('mfa', ip);
-      if (mfaLimitResponse) return mfaLimitResponse;
-      return NextResponse.json(
-        { success: false, error: 'Invalid MFA code', code: 'MFA_INVALID' },
-        { status: 401 },
-      );
-    }
-
-    await logAuditEvent('AUTH_MFA_CHALLENGE_SUCCESS', {
-      userId: user.id,
-      ...auditCtx,
-      metadata: { type: 'totp' },
-    });
-  } else if (user.telegramEnabled) {
-    // Telegram OTP: send code then return a short-lived mfaToken for the verify step
-    if (!user.telegramChatId) {
-      return NextResponse.json(
-        { success: false, error: 'Telegram MFA is enabled but no chat ID is configured' },
-        { status: 500 },
-      );
-    }
-
-    await sendTelegramOtp(user.id, user.telegramChatId);
-
-    const mfaToken = await new SignJWT({ mfaType: 'telegram', purpose: 'mfa-challenge' })
+  if (passkeyCount > 0) {
+    // Issue a short-lived preAuthToken — password was correct, passkey is next step
+    const preAuthToken = await new SignJWT({ purpose: 'pre-auth', email: user.email })
       .setProtectedHeader({ alg: 'HS256' })
       .setSubject(user.id)
       .setIssuedAt()
-      .setExpirationTime('15m')
+      .setExpirationTime('5m')
       .sign(ACCESS_SECRET);
 
     return NextResponse.json(
-      { success: false, mfaRequired: true, mfaType: 'telegram', mfaToken },
-      { status: 401 },
-    );
-  } else if (user.emailMfaEnabled) {
-    // Email OTP: send code then return a short-lived mfaToken for the verify step
-    await sendEmailOtp(user.id, user.email);
-
-    const mfaToken = await new SignJWT({ mfaType: 'email', purpose: 'mfa-challenge' })
-      .setProtectedHeader({ alg: 'HS256' })
-      .setSubject(user.id)
-      .setIssuedAt()
-      .setExpirationTime('15m')
-      .sign(ACCESS_SECRET);
-
-    return NextResponse.json(
-      { success: false, mfaRequired: true, mfaType: 'email', mfaToken },
-      { status: 401 },
+      {
+        success:       false,
+        code:          'PASSKEY_REQUIRED',
+        preAuthToken,
+        data: {
+          telegramEnabled: user.telegramEnabled,
+          whatsappEnabled: false,
+        },
+      },
+      { status: 200 },
     );
   }
 
-  // ── Create session ─────────────────────────────────────────────────────────
+  // ── No passkeys — create full session ─────────────────────────────────────
   await createSessionAndSetCookies({ userId: user.id, email: user.email, userAgent, ip });
 
   // Update last login timestamp
@@ -185,23 +131,19 @@ export async function POST(req: NextRequest) {
     data:  { lastLoginAt: new Date() },
   });
 
-  const mfaUsed = user.totpEnabled || user.telegramEnabled || user.emailMfaEnabled;
   await logAuditEvent('AUTH_LOGIN_SUCCESS', {
     userId: user.id,
     ...auditCtx,
-    metadata: { mfa: mfaUsed },
+    metadata: { mfa: false },
   });
 
   return NextResponse.json({
     success: true,
     data: {
       user: {
-        id:               user.id,
-        email:            user.email,
-        totpEnabled:      user.totpEnabled,
-        telegramEnabled:  user.telegramEnabled,
-        emailMfaEnabled:  user.emailMfaEnabled,
-        lockTimeout:      user.lockTimeout,
+        id:          user.id,
+        email:       user.email,
+        lockTimeout: user.lockTimeout,
       },
     },
   });

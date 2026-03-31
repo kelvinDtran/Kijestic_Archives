@@ -1,28 +1,39 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, Lock, Mail, Shield, Fingerprint, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, Lock, Mail, Shield, Fingerprint, Loader2, KeyRound, MessageCircle, Phone } from 'lucide-react';
 
-type MfaType = 'totp' | 'telegram' | 'email';
+type RecoveryType = 'backup' | 'telegram' | 'whatsapp';
 
 export default function LoginPage() {
   const router = useRouter();
+
+  // Credential fields
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
-  const [totpCode, setTotpCode] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [requiresMfa, setRequiresMfa]   = useState(false);
-  const [mfaType, setMfaType]           = useState<MfaType | null>(null);
-  const [mfaToken, setMfaToken]         = useState<string | null>(null);
-  const [mfaCode, setMfaCode]           = useState('');
-  const [isLoading, setIsLoading]       = useState(false);
+
+  // Passkey-first flow state
+  const [preAuthToken, setPreAuthToken]       = useState<string | null>(null);
+  const [recoveryType, setRecoveryType]       = useState<RecoveryType | null>(null);
+  const [recoveryCode, setRecoveryCode]       = useState('');
+  const [showRecovery, setShowRecovery]       = useState(false);
+  const [availableRecovery, setAvailableRecovery] = useState<{ telegram: boolean; whatsapp: boolean }>({
+    telegram: false,
+    whatsapp: false,
+  });
+
+  // Loading states
+  const [isLoading, setIsLoading]               = useState(false);
   const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
-  const [isResending, setIsResending]   = useState(false);
-  const [error, setError]               = useState<string | null>(null);
-  const totpRef = useRef<HTMLInputElement>(null);
-  const mfaCodeRef = useRef<HTMLInputElement>(null);
+  const [isSendingCode, setIsSendingCode]       = useState(false);
+  const [isVerifyingRecovery, setIsVerifyingRecovery] = useState(false);
+
+  const [error, setError] = useState<string | null>(null);
+
+  // ── Step 1: email + password submit ────────────────────────────────────────
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,102 +41,91 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      // Telegram / Email MFA verification path
-      if (requiresMfa && (mfaType === 'telegram' || mfaType === 'email')) {
-        const res = await fetch('/api/auth/mfa/verify-login', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ mfaToken, code: mfaCode }),
-          credentials: 'include',
-        });
-
-        const data = await res.json();
-
-        if (!res.ok) throw new Error(data.error ?? 'Verification failed');
-
-        router.push('/dashboard');
-        return;
-      }
-
-      // TOTP path (and initial credential submission)
       const res = await fetch('/api/auth/login', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          email,
-          password,
-          ...(requiresMfa && mfaType === 'totp' && { totpCode }),
-        }),
+        body:    JSON.stringify({ email, password }),
         credentials: 'include',
       });
 
       const data = await res.json();
 
-      if (!res.ok) {
-        if (data.code === 'MFA_REQUIRED') {
-          const type: MfaType = data.mfaType ?? 'totp';
-          setMfaType(type);
-          setRequiresMfa(true);
-
-          if (type === 'totp') {
-            setTimeout(() => totpRef.current?.focus(), 100);
-          } else {
-            // Server already sent the code for Telegram/Email; store token for verification
-            if (data.mfaToken) setMfaToken(data.mfaToken);
-            setTimeout(() => mfaCodeRef.current?.focus(), 100);
-          }
-
-          setIsLoading(false);
-          return;
-        }
-        throw new Error(data.error ?? 'Login failed');
+      if (data.success) {
+        // No passkeys enrolled — logged in directly
+        router.push('/dashboard');
+        return;
       }
 
-      router.push('/dashboard');
+      if (!data.success && data.code === 'PASSKEY_REQUIRED') {
+        setPreAuthToken(data.preAuthToken);
+        setAvailableRecovery({
+          telegram:  data.data?.telegramEnabled  ?? false,
+          whatsapp:  data.data?.whatsappEnabled  ?? false,
+        });
+        setIsLoading(false);
+        return;
+      }
+
+      throw new Error(data.error ?? 'Login failed');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
       setIsLoading(false);
     }
   };
 
-  const handleResendCode = async () => {
-    if (!mfaToken || isResending) return;
+  // ── Passkey verification (post-password) ───────────────────────────────────
+
+  const handleVerifyPasskey = async () => {
+    if (!preAuthToken) return;
     setError(null);
-    setIsResending(true);
+    setIsPasskeyLoading(true);
     try {
-      const res = await fetch('/api/auth/mfa/send-code', {
+      const { startAuthentication } = await import('@simplewebauthn/browser');
+
+      // 1. Get authentication options — pass preAuthToken instead of email
+      const optRes = await fetch('/api/auth/webauthn/authenticate', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ mfaToken }),
+        body:    JSON.stringify({ preAuthToken }),
         credentials: 'include',
       });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error ?? 'Failed to resend code');
+      if (!optRes.ok) throw new Error('Failed to start passkey authentication');
+      const { data: optData } = await optRes.json();
+
+      // 2. Invoke browser passkey UI
+      const authResponse = await startAuthentication({ optionsJSON: optData.options });
+
+      // 3. Verify with server — pass preAuthToken
+      const verifyRes = await fetch('/api/auth/webauthn/authenticate/verify', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ response: authResponse, preAuthToken }),
+        credentials: 'include',
+      });
+      if (!verifyRes.ok) {
+        const err = await verifyRes.json().catch(() => ({}));
+        throw new Error(err.error ?? 'Passkey verification failed');
       }
+
+      router.push('/dashboard');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to resend code');
+      const message = err instanceof Error ? err.message : 'Passkey sign-in failed';
+      if (!message.includes('cancelled') && !message.includes('abort')) {
+        setError(message);
+      }
     } finally {
-      setIsResending(false);
+      setIsPasskeyLoading(false);
     }
   };
 
-  const handleBack = () => {
-    setRequiresMfa(false);
-    setMfaType(null);
-    setMfaToken(null);
-    setTotpCode('');
-    setMfaCode('');
-  };
+  // ── Passwordless passkey sign-in (pre-password, existing button) ───────────
 
   const handlePasskeySignIn = async () => {
     setError(null);
     setIsPasskeyLoading(true);
     try {
-      // Dynamically import browser library to avoid SSR issues
       const { startAuthentication } = await import('@simplewebauthn/browser');
 
-      // 1. Get authentication options from server
       const optRes = await fetch('/api/auth/webauthn/authenticate', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -135,10 +135,8 @@ export default function LoginPage() {
       if (!optRes.ok) throw new Error('Failed to start passkey authentication');
       const { data: optData } = await optRes.json();
 
-      // 2. Invoke browser passkey UI
       const authResponse = await startAuthentication({ optionsJSON: optData.options });
 
-      // 3. Verify with server
       const verifyRes = await fetch('/api/auth/webauthn/authenticate/verify', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -152,7 +150,6 @@ export default function LoginPage() {
 
       router.push('/dashboard');
     } catch (err) {
-      // User cancelled passkey prompt — don't show an error for that case
       const message = err instanceof Error ? err.message : 'Passkey sign-in failed';
       if (!message.includes('cancelled') && !message.includes('abort')) {
         setError(message);
@@ -162,130 +159,232 @@ export default function LoginPage() {
     }
   };
 
-  const renderMfaStep = () => {
-    if (mfaType === 'totp') {
-      return (
-        <div>
-          <label className="block text-sm text-aegis-subtle mb-1.5" htmlFor="totp">
-            Authenticator Code
-          </label>
-          <input
-            id="totp"
-            ref={totpRef}
-            type="text"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            value={totpCode}
-            onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-            className="aegis-input text-center text-2xl tracking-[0.5em] font-mono"
-            placeholder="000000"
-            maxLength={6}
-            required
-          />
-          <p className="text-xs text-aegis-muted mt-1.5">
-            Enter the 6-digit code from your authenticator app
-          </p>
-        </div>
-      );
-    }
+  // ── Recovery: send code via Telegram or WhatsApp ───────────────────────────
 
-    if (mfaType === 'telegram') {
-      return (
-        <div>
-          <label className="block text-sm text-aegis-subtle mb-1.5" htmlFor="mfa-code">
-            Telegram Verification Code
-          </label>
-          <input
-            id="mfa-code"
-            ref={mfaCodeRef}
-            type="text"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            value={mfaCode}
-            onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-            className="aegis-input text-center text-2xl tracking-[0.5em] font-mono"
-            placeholder="000000"
-            maxLength={6}
-            required
-          />
-          <p className="text-xs text-aegis-muted mt-1.5">
-            A 6-digit code was sent to your Telegram. Enter it below.
-          </p>
-          <button
-            type="button"
-            onClick={handleResendCode}
-            disabled={isResending}
-            className="mt-2 text-xs text-aegis-primary hover:underline disabled:opacity-50"
-          >
-            {isResending ? 'Sending…' : 'Resend to Telegram'}
-          </button>
-        </div>
-      );
+  const handleSendRecoveryCode = async (type: 'telegram' | 'whatsapp') => {
+    if (!preAuthToken) return;
+    setError(null);
+    setIsSendingCode(true);
+    try {
+      const res = await fetch('/api/auth/mfa/send-code', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ preAuthToken, type }),
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Failed to send ${type} code`);
+      setRecoveryType(type);
+      setShowRecovery(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to send ${type} code`);
+    } finally {
+      setIsSendingCode(false);
     }
-
-    if (mfaType === 'email') {
-      return (
-        <div>
-          <label className="block text-sm text-aegis-subtle mb-1.5" htmlFor="mfa-code">
-            Email Verification Code
-          </label>
-          <input
-            id="mfa-code"
-            ref={mfaCodeRef}
-            type="text"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            value={mfaCode}
-            onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-            className="aegis-input text-center text-2xl tracking-[0.5em] font-mono"
-            placeholder="000000"
-            maxLength={6}
-            required
-          />
-          <p className="text-xs text-aegis-muted mt-1.5">
-            A 6-digit code was sent to your email. Enter it below.
-          </p>
-          <button
-            type="button"
-            onClick={handleResendCode}
-            disabled={isResending}
-            className="mt-2 text-xs text-aegis-primary hover:underline disabled:opacity-50"
-          >
-            {isResending ? 'Sending…' : 'Resend code'}
-          </button>
-        </div>
-      );
-    }
-
-    return null;
   };
 
-  const submitLabel = () => {
-    if (!requiresMfa) return 'Sign In';
-    return 'Verify Code';
+  // ── Recovery: verify submitted code ───────────────────────────────────────
+
+  const handleVerifyRecovery = async () => {
+    if (!preAuthToken || !recoveryType) return;
+    setError(null);
+    setIsVerifyingRecovery(true);
+    try {
+      const res = await fetch('/api/auth/mfa/verify-login', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ preAuthToken, code: recoveryCode, type: recoveryType }),
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Verification failed');
+      router.push('/dashboard');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Verification failed');
+    } finally {
+      setIsVerifyingRecovery(false);
+    }
   };
 
-  const submitLoadingLabel = () => {
-    if (!requiresMfa) return 'Signing in…';
-    return 'Verifying…';
+  // ── Navigation helpers ─────────────────────────────────────────────────────
+
+  const backToPasskeyPrompt = () => {
+    setShowRecovery(false);
+    setRecoveryType(null);
+    setRecoveryCode('');
+    setError(null);
   };
+
+  const backToLogin = () => {
+    setPreAuthToken(null);
+    setAvailableRecovery({ telegram: false, whatsapp: false });
+    setShowRecovery(false);
+    setRecoveryType(null);
+    setRecoveryCode('');
+    setError(null);
+  };
+
+  // ── Recovery description ──────────────────────────────────────────────────
+
+  const recoveryDescription = () => {
+    if (recoveryType === 'backup')   return 'Enter your backup code:';
+    if (recoveryType === 'telegram') return 'Enter the code sent to your Telegram:';
+    if (recoveryType === 'whatsapp') return 'Enter the code sent to your WhatsApp:';
+    return 'Enter your recovery code:';
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="aegis-card animate-fade-in">
-      <h1 className="text-xl font-semibold text-aegis-text mb-1">Sign in</h1>
-      <p className="text-sm text-aegis-muted mb-6">
-        Enter your credentials to access your vault
-      </p>
 
-      {error && (
-        <div className="bg-aegis-danger-muted border border-aegis-danger text-aegis-danger text-sm rounded-aegis px-3 py-2 mb-4">
-          {error}
-        </div>
-      )}
+      {/* State 3 — Recovery code entry */}
+      {preAuthToken && showRecovery && recoveryType ? (
+        <>
+          <h1 className="text-xl font-semibold text-aegis-text mb-1">Enter recovery code</h1>
+          <p className="text-sm text-aegis-muted mb-6">{recoveryDescription()}</p>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {!requiresMfa ? (
-          <>
+          {error && (
+            <div className="bg-aegis-danger-muted border border-aegis-danger text-aegis-danger text-sm rounded-aegis px-3 py-2 mb-4">
+              {error}
+            </div>
+          )}
+
+          <div className="space-y-4">
+            <input
+              type="text"
+              inputMode={recoveryType === 'backup' ? 'text' : 'numeric'}
+              autoComplete="one-time-code"
+              value={recoveryCode}
+              onChange={(e) => setRecoveryCode(e.target.value)}
+              className={`aegis-input w-full ${recoveryType !== 'backup' ? 'text-center text-2xl tracking-[0.5em] font-mono' : ''}`}
+              placeholder={recoveryType === 'backup' ? 'XXXX-XXXX-XXXX-XXXX-XXXX' : '000000'}
+              maxLength={recoveryType === 'backup' ? 64 : 6}
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={handleVerifyRecovery}
+              disabled={isVerifyingRecovery || !recoveryCode.trim()}
+              className="aegis-btn-primary w-full flex items-center justify-center gap-2"
+            >
+              {isVerifyingRecovery ? (
+                <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Verifying…</>
+              ) : (
+                'Verify Recovery Code'
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={backToPasskeyPrompt}
+              className="aegis-btn-ghost w-full text-center text-sm"
+            >
+              ← Back
+            </button>
+          </div>
+        </>
+      ) : preAuthToken && !showRecovery ? (
+        /* State 2 — Passkey prompt */
+        <>
+          <h1 className="text-xl font-semibold text-aegis-text mb-1">Verify with your passkey</h1>
+          <p className="text-sm text-aegis-muted mb-6">
+            Use your device passkey or biometrics to complete sign-in.
+          </p>
+
+          {error && (
+            <div className="bg-aegis-danger-muted border border-aegis-danger text-aegis-danger text-sm rounded-aegis px-3 py-2 mb-4">
+              {error}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {/* Primary passkey button */}
+            <button
+              type="button"
+              onClick={handleVerifyPasskey}
+              disabled={isPasskeyLoading || isSendingCode}
+              className="aegis-btn-primary w-full flex items-center justify-center gap-2 text-sm"
+            >
+              {isPasskeyLoading ? (
+                <><Loader2 className="w-4 h-4 animate-spin" /> Waiting for passkey…</>
+              ) : (
+                <><Fingerprint className="w-5 h-5" /> Verify with Passkey</>
+              )}
+            </button>
+
+            {/* Recovery divider */}
+            <div className="flex items-center gap-3 my-2">
+              <hr className="flex-1 border-aegis-border" />
+              <span className="text-xs text-aegis-muted">or recover access</span>
+              <hr className="flex-1 border-aegis-border" />
+            </div>
+
+            {/* Backup code — always available */}
+            <button
+              type="button"
+              onClick={() => { setRecoveryType('backup'); setShowRecovery(true); }}
+              disabled={isPasskeyLoading || isSendingCode}
+              className="aegis-btn-ghost w-full flex items-center justify-center gap-2 text-sm"
+            >
+              <KeyRound className="w-4 h-4" /> Use backup code
+            </button>
+
+            {/* Telegram — if enrolled */}
+            {availableRecovery.telegram && (
+              <button
+                type="button"
+                onClick={() => handleSendRecoveryCode('telegram')}
+                disabled={isPasskeyLoading || isSendingCode}
+                className="aegis-btn-ghost w-full flex items-center justify-center gap-2 text-sm"
+              >
+                {isSendingCode ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Sending…</>
+                ) : (
+                  <><MessageCircle className="w-4 h-4" /> Send Telegram code</>
+                )}
+              </button>
+            )}
+
+            {/* WhatsApp — if enrolled */}
+            {availableRecovery.whatsapp && (
+              <button
+                type="button"
+                onClick={() => handleSendRecoveryCode('whatsapp')}
+                disabled={isPasskeyLoading || isSendingCode}
+                className="aegis-btn-ghost w-full flex items-center justify-center gap-2 text-sm"
+              >
+                {isSendingCode ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Sending…</>
+                ) : (
+                  <><Phone className="w-4 h-4" /> Send WhatsApp code</>
+                )}
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={backToLogin}
+              className="aegis-btn-ghost w-full text-center text-sm"
+            >
+              ← Back to login
+            </button>
+          </div>
+        </>
+      ) : (
+        /* State 1 — Email + Password form */
+        <>
+          <h1 className="text-xl font-semibold text-aegis-text mb-1">Sign in</h1>
+          <p className="text-sm text-aegis-muted mb-6">
+            Enter your credentials to access your vault
+          </p>
+
+          {error && (
+            <div className="bg-aegis-danger-muted border border-aegis-danger text-aegis-danger text-sm rounded-aegis px-3 py-2 mb-4">
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
             {/* Email */}
             <div>
               <label className="block text-sm text-aegis-subtle mb-1.5" htmlFor="email">
@@ -333,36 +432,20 @@ export default function LoginPage() {
                 </button>
               </div>
             </div>
-          </>
-        ) : (
-          renderMfaStep()
-        )}
 
-        <button type="submit" disabled={isLoading} className="aegis-btn-primary w-full mt-2">
-          {isLoading ? (
-            <span className="flex items-center justify-center gap-2">
-              <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              {submitLoadingLabel()}
-            </span>
-          ) : (
-            submitLabel()
-          )}
-        </button>
+            <button type="submit" disabled={isLoading} className="aegis-btn-primary w-full mt-2">
+              {isLoading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Signing in…
+                </span>
+              ) : (
+                'Sign In'
+              )}
+            </button>
+          </form>
 
-        {requiresMfa && (
-          <button
-            type="button"
-            onClick={handleBack}
-            className="aegis-btn-ghost w-full text-center text-sm"
-          >
-            ← Back
-          </button>
-        )}
-      </form>
-
-      {/* Passkey sign-in */}
-      {!requiresMfa && (
-        <>
+          {/* Passwordless passkey sign-in */}
           <div className="flex items-center gap-3 my-4">
             <hr className="flex-1 border-aegis-border" />
             <span className="text-xs text-aegis-muted">or</span>
@@ -378,27 +461,27 @@ export default function LoginPage() {
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Waiting for passkey…</>
               : <><Fingerprint className="w-4 h-4" /> Sign in with passkey</>}
           </button>
+
+          <div className="mt-6 pt-4 border-t border-aegis-border text-center">
+            <p className="text-sm text-aegis-muted">
+              Don&apos;t have an account?{' '}
+              <Link href="/register" className="text-aegis-primary hover:underline">
+                Create one
+              </Link>
+            </p>
+          </div>
+
+          {/* Security note */}
+          <div className="mt-4 flex items-start gap-2 bg-aegis-elevated rounded-aegis px-3 py-2">
+            <Shield className="w-3.5 h-3.5 text-aegis-muted mt-0.5 shrink-0" />
+            <p className="text-xs text-aegis-muted leading-relaxed">
+              You&apos;ll be asked for your{' '}
+              <span className="text-aegis-subtle">vault master password</span> separately
+              to decrypt your secrets. Your account password only verifies your identity.
+            </p>
+          </div>
         </>
       )}
-
-      <div className="mt-6 pt-4 border-t border-aegis-border text-center">
-        <p className="text-sm text-aegis-muted">
-          Don&apos;t have an account?{' '}
-          <Link href="/register" className="text-aegis-primary hover:underline">
-            Create one
-          </Link>
-        </p>
-      </div>
-
-      {/* Security note */}
-      <div className="mt-4 flex items-start gap-2 bg-aegis-elevated rounded-aegis px-3 py-2">
-        <Shield className="w-3.5 h-3.5 text-aegis-muted mt-0.5 shrink-0" />
-        <p className="text-xs text-aegis-muted leading-relaxed">
-          You&apos;ll be asked for your{' '}
-          <span className="text-aegis-subtle">vault master password</span> separately
-          to decrypt your secrets. Your account password only verifies your identity.
-        </p>
-      </div>
     </div>
   );
 }

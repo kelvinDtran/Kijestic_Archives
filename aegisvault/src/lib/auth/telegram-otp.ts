@@ -14,23 +14,14 @@ import { db } from '../server/db';
 
 // ── Telegram Configuration ────────────────────────────────────────────────────
 
-function loadTelegramConfig(): { botToken: string; botName: string } {
+function loadTelegramConfig(): { botToken: string; botName: string } | null {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const botName  = process.env.TELEGRAM_BOT_NAME ?? '';
 
-  if (process.env.NODE_ENV !== 'test') {
-    if (!botToken) {
-      throw new Error('TELEGRAM_BOT_TOKEN environment variable is not set.');
-    }
-  }
+  if (!botToken) return null;  // Optional — not required to run
 
-  return {
-    botToken: botToken ?? '',
-    botName,
-  };
+  return { botToken, botName };
 }
-
-const TELEGRAM_CONFIG = loadTelegramConfig();
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -40,8 +31,12 @@ const BCRYPT_ROUNDS = 10;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function callTelegramApi(method: string, body: Record<string, unknown>): Promise<void> {
-  const url = `https://api.telegram.org/bot${TELEGRAM_CONFIG.botToken}/${method}`;
+async function callTelegramApi(
+  config: { botToken: string; botName: string },
+  method: string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const url = `https://api.telegram.org/bot${config.botToken}/${method}`;
   const res = await fetch(url, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -72,6 +67,11 @@ function generateAlphanumericCode(length: number): string {
  * so there is never more than one active code per user.
  */
 export async function sendTelegramOtp(userId: string, telegramChatId: bigint): Promise<void> {
+  const config = loadTelegramConfig();
+  if (!config) {
+    throw new Error('Telegram MFA is not configured (TELEGRAM_BOT_TOKEN missing)');
+  }
+
   const code     = randomInt(100000, 1000000).toString(); // [100000, 999999]
   const codeHash = await bcrypt.hash(code, BCRYPT_ROUNDS);
   const expiresAt = new Date(Date.now() + OTP_TTL_MS);
@@ -90,7 +90,7 @@ export async function sendTelegramOtp(userId: string, telegramChatId: bigint): P
     },
   });
 
-  await callTelegramApi('sendMessage', {
+  await callTelegramApi(config, 'sendMessage', {
     chat_id: telegramChatId.toString(),
     text:    `🔐 Your AegisVault login code: ${code}\n\nExpires in 10 minutes. Never share this code.`,
   });
@@ -151,6 +151,11 @@ export async function generateTelegramLinkCode(userId: string): Promise<{
   linkCode: string;
   deepLink: string;
 }> {
+  const config = loadTelegramConfig();
+  if (!config) {
+    throw new Error('Telegram MFA is not configured (TELEGRAM_BOT_TOKEN missing)');
+  }
+
   const linkCode  = generateAlphanumericCode(32);
   const expiresAt = new Date(Date.now() + LINK_TTL_MS);
 
@@ -169,7 +174,7 @@ export async function generateTelegramLinkCode(userId: string): Promise<{
     },
   });
 
-  const deepLink = `https://t.me/${TELEGRAM_CONFIG.botName}?start=${linkCode}`;
+  const deepLink = `https://t.me/${config.botName}?start=${linkCode}`;
 
   return { linkCode, deepLink };
 }

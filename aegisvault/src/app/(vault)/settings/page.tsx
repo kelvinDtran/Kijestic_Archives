@@ -1,7 +1,11 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Shield, Clock, Key, Download, Upload, Trash2, CheckCircle2, AlertTriangle, Loader2, Fingerprint, Plus, Pencil, Smartphone, Mail, Send } from 'lucide-react';
+import {
+  Shield, Clock, Key, Download, Upload, Trash2, CheckCircle2,
+  AlertTriangle, Loader2, Fingerprint, Plus, Pencil, Smartphone,
+  Send, Phone, Copy,
+} from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { useVault } from '@/contexts/VaultContext';
 import {
@@ -17,55 +21,69 @@ export default function SettingsPage() {
   const { isLocked, getVaultKey } = useVault();
   const [lockTimeout, setLockTimeout] = useState(300);
   const [saved, setSaved] = useState(false);
-  const [mfaEnabled, setMfaEnabled] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   // Export state
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
+  const [isExporting, setIsExporting]   = useState(false);
+  const [exportError, setExportError]   = useState<string | null>(null);
 
   // Import state
-  const [isImporting, setIsImporting] = useState(false);
-  const [importError, setImportError] = useState<string | null>(null);
+  const [isImporting, setIsImporting]     = useState(false);
+  const [importError, setImportError]     = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
 
   // Passkey state
-  interface PasskeyCredential { id: string; name: string; deviceType: string; backedUp: boolean; transports: string[]; createdAt: string; lastUsedAt: string | null; }
-  const [passkeys, setPasskeys] = useState<PasskeyCredential[]>([]);
+  interface PasskeyCredential {
+    id: string;
+    name: string;
+    deviceType: string;
+    backedUp: boolean;
+    transports: string[];
+    createdAt: string;
+    lastUsedAt: string | null;
+  }
+  const [passkeys, setPasskeys]                     = useState<PasskeyCredential[]>([]);
   const [isRegisteringPasskey, setIsRegisteringPasskey] = useState(false);
-  const [passkeyError, setPasskeyError] = useState<string | null>(null);
-  const [deletingPasskeyId, setDeletingPasskeyId] = useState<string | null>(null);
+  const [passkeyError, setPasskeyError]             = useState<string | null>(null);
+  const [deletingPasskeyId, setDeletingPasskeyId]   = useState<string | null>(null);
 
   // Rename state
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState('');
+  const [renamingId, setRenamingId]       = useState<string | null>(null);
+  const [renameValue, setRenameValue]     = useState('');
   const [isSavingRename, setIsSavingRename] = useState(false);
 
-  // Telegram MFA state
-  const [telegramEnabled, setTelegramEnabled] = useState(false);
-  const [telegramStep, setTelegramStep] = useState<'idle' | 'linking' | 'linked'>('idle');
-  const [telegramDeepLink, setTelegramDeepLink] = useState<string | null>(null);
-  const [telegramLinkCode, setTelegramLinkCode] = useState<string | null>(null);
-  const [isRequestingLink, setIsRequestingLink] = useState(false);
-  const [isDisablingTelegram, setIsDisablingTelegram] = useState(false);
-  const [telegramDisableCode, setTelegramDisableCode] = useState('');
+  // Backup Codes state
+  const [backupCodesRemaining, setBackupCodesRemaining] = useState<number | null>(null);
+  const [isGeneratingCodes, setIsGeneratingCodes]       = useState(false);
+  const [newBackupCodes, setNewBackupCodes]             = useState<string[] | null>(null);
+
+  // Telegram state (renamed heading: "Telegram (Optional Recovery)")
+  const [telegramEnabled, setTelegramEnabled]               = useState(false);
+  const [telegramStep, setTelegramStep]                     = useState<'idle' | 'linking' | 'linked'>('idle');
+  const [telegramDeepLink, setTelegramDeepLink]             = useState<string | null>(null);
+  const [telegramLinkCode, setTelegramLinkCode]             = useState<string | null>(null);
+  const [isRequestingLink, setIsRequestingLink]             = useState(false);
+  const [isDisablingTelegram, setIsDisablingTelegram]       = useState(false);
+  const [telegramDisableCode, setTelegramDisableCode]       = useState('');
   const [showTelegramDisableForm, setShowTelegramDisableForm] = useState(false);
-  const [telegramError, setTelegramError] = useState<string | null>(null);
-  const [telegramSuccess, setTelegramSuccess] = useState<string | null>(null);
+  const [telegramError, setTelegramError]                   = useState<string | null>(null);
+  const [telegramSuccess, setTelegramSuccess]               = useState<string | null>(null);
   const telegramPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Email MFA state
-  const [emailMfaEnabled, setEmailMfaEnabled] = useState(false);
-  const [emailMfaStep, setEmailMfaStep] = useState<'idle' | 'verify'>('idle');
-  const [emailMfaCode, setEmailMfaCode] = useState('');
-  const [isEnablingEmail, setIsEnablingEmail] = useState(false);
-  const [isVerifyingEmail, setIsVerifyingEmail] = useState(false);
-  const [isDisablingEmail, setIsDisablingEmail] = useState(false);
-  const [emailDisableCode, setEmailDisableCode] = useState('');
-  const [showEmailDisableForm, setShowEmailDisableForm] = useState(false);
-  const [emailMfaError, setEmailMfaError] = useState<string | null>(null);
-  const [emailMfaSuccess, setEmailMfaSuccess] = useState<string | null>(null);
+  // WhatsApp state
+  const [whatsappEnabled, setWhatsappEnabled]                   = useState(false);
+  const [whatsappStep, setWhatsappStep]                         = useState<'idle' | 'verify'>('idle');
+  const [whatsappPhone, setWhatsappPhone]                       = useState('');
+  const [whatsappVerifyCode, setWhatsappVerifyCode]             = useState('');
+  const [isWhatsappLoading, setIsWhatsappLoading]               = useState(false);
+  const [whatsappError, setWhatsappError]                       = useState<string | null>(null);
+  const [whatsappSuccess, setWhatsappSuccess]                   = useState<string | null>(null);
+  const [showWhatsappDisableForm, setShowWhatsappDisableForm]   = useState(false);
+  const [whatsappDisableCode, setWhatsappDisableCode]           = useState('');
+  const [whatsappMaskedPhone, setWhatsappMaskedPhone]           = useState<string | null>(null);
+
+  // ── Data fetching ─────────────────────────────────────────────────────────
 
   const fetchPasskeys = useCallback(async () => {
     const res = await fetch('/api/auth/webauthn/credentials', { credentials: 'include' });
@@ -75,9 +93,162 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchBackupCodeCount = useCallback(async () => {
+    const res = await fetch('/api/auth/backup-codes', { credentials: 'include' });
+    if (res.ok) {
+      const { data } = await res.json();
+      setBackupCodesRemaining(data.remaining ?? null);
+    }
+  }, []);
+
   useEffect(() => {
     fetchPasskeys();
-  }, [fetchPasskeys]);
+    fetchBackupCodeCount();
+  }, [fetchPasskeys, fetchBackupCodeCount]);
+
+  useEffect(() => {
+    fetch('/api/account/preferences', { credentials: 'include' })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) {
+          setLockTimeout(d.data.lockTimeout ?? 300);
+          setTelegramEnabled(d.data.telegramEnabled ?? false);
+          setWhatsappEnabled(d.data.whatsappEnabled ?? false);
+          if (d.data.whatsappMaskedPhone) setWhatsappMaskedPhone(d.data.whatsappMaskedPhone);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setIsLoading(false));
+  }, []);
+
+  // ── Preferences ──────────────────────────────────────────────────────────
+
+  const savePreferences = async () => {
+    await fetch('/api/account/preferences', {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ lockTimeout }),
+      credentials: 'include',
+    });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  // ── Export ────────────────────────────────────────────────────────────────
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      const vaultKey = getVaultKey();
+
+      const res = await fetch('/api/vault/export', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch vault items');
+      const { data } = await res.json();
+      const encryptedItems: EncryptedVaultItem[] = data.items;
+
+      const decryptedItems: DecryptedVaultItem[] = encryptedItems.map((item) =>
+        decryptVaultItem(vaultKey, item),
+      );
+
+      const exportPackage: VaultExportPackage = createExportPackage(vaultKey, decryptedItems);
+
+      const blob = new Blob([JSON.stringify(exportPackage, null, 2)], { type: 'application/json' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `aegisvault-backup-${new Date().toISOString().slice(0, 10)}.aegisvault`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // ── Import ────────────────────────────────────────────────────────────────
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsImporting(true);
+    setImportError(null);
+    setImportSuccess(null);
+
+    try {
+      const vaultKey = getVaultKey();
+
+      const text = await file.text();
+      const pkg: VaultExportPackage = JSON.parse(text);
+
+      const decryptedItems = decryptExportPackage(vaultKey, pkg);
+
+      const reEncryptedItems = decryptedItems.map((item) => {
+        const encrypted = encryptVaultItem(
+          vaultKey,
+          item.itemType,
+          item.isFavorite,
+          item.isHighRisk,
+          item.data,
+        );
+        return { ...encrypted, isArchived: item.isArchived };
+      });
+
+      const res = await fetch('/api/vault/import', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ items: reEncryptedItems }),
+        credentials: 'include',
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? 'Import failed');
+      }
+
+      const { data } = await res.json();
+      setImportSuccess(`Successfully imported ${data.imported} item${data.imported !== 1 ? 's' : ''}.`);
+    } catch (err) {
+      setImportError(
+        err instanceof Error
+          ? err.message
+          : 'Import failed. The file may be corrupted or from a different vault.',
+      );
+    } finally {
+      setIsImporting(false);
+      if (importFileRef.current) importFileRef.current.value = '';
+    }
+  };
+
+  // ── Backup Codes ──────────────────────────────────────────────────────────
+
+  const generateBackupCodes = async () => {
+    setIsGeneratingCodes(true);
+    try {
+      const res = await fetch('/api/auth/backup-codes', {
+        method:      'POST',
+        credentials: 'include',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Failed to generate backup codes');
+      setNewBackupCodes(json.data.codes);
+      setBackupCodesRemaining(json.data.remaining ?? 8);
+    } catch (err) {
+      // Surface error in passkeyError area for simplicity — backup codes live in same security section
+      setPasskeyError(err instanceof Error ? err.message : 'Failed to generate backup codes');
+    } finally {
+      setIsGeneratingCodes(false);
+    }
+  };
+
+  const copyBackupCodes = () => {
+    if (!newBackupCodes) return;
+    navigator.clipboard.writeText(newBackupCodes.join('\n')).catch(() => {});
+  };
+
+  // ── Passkey management ────────────────────────────────────────────────────
 
   const registerPasskey = async () => {
     setPasskeyError(null);
@@ -85,15 +256,12 @@ export default function SettingsPage() {
     try {
       const { startRegistration } = await import('@simplewebauthn/browser');
 
-      // 1. Get registration options
       const optRes = await fetch('/api/auth/webauthn/register', { method: 'POST', credentials: 'include' });
       if (!optRes.ok) throw new Error('Failed to start passkey registration');
       const { data: optData } = await optRes.json();
 
-      // 2. Trigger browser passkey creation
       const registrationResponse = await startRegistration({ optionsJSON: optData.options });
 
-      // 3. Verify and store
       const verifyRes = await fetch('/api/auth/webauthn/register/verify', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -117,7 +285,7 @@ export default function SettingsPage() {
   };
 
   const deletePasskey = async (id: string) => {
-    if (!confirm('Remove this passkey? You won\'t be able to sign in with it anymore.')) return;
+    if (!confirm("Remove this passkey? You won't be able to sign in with it anymore.")) return;
     setDeletingPasskeyId(id);
     try {
       await fetch(`/api/auth/webauthn/credentials/${id}`, { method: 'DELETE', credentials: 'include' });
@@ -149,133 +317,11 @@ export default function SettingsPage() {
         credentials: 'include',
       });
       if (res.ok) {
-        setPasskeys((prev) => prev.map((p) => p.id === id ? { ...p, name: trimmed } : p));
+        setPasskeys((prev) => prev.map((p) => (p.id === id ? { ...p, name: trimmed } : p)));
         cancelRename();
       }
     } finally {
       setIsSavingRename(false);
-    }
-  };
-
-  useEffect(() => {
-    fetch('/api/account/preferences', { credentials: 'include' })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.success) {
-          setLockTimeout(d.data.lockTimeout ?? 300);
-          setMfaEnabled(d.data.totpEnabled ?? false);
-          setTelegramEnabled(d.data.telegramEnabled ?? false);
-          setEmailMfaEnabled(d.data.emailMfaEnabled ?? false);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setIsLoading(false));
-  }, []);
-
-  const savePreferences = async () => {
-    await fetch('/api/account/preferences', {
-      method:  'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ lockTimeout }),
-      credentials: 'include',
-    });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
-  // ── Export ────────────────────────────────────────────────────────────────
-
-  const handleExport = async () => {
-    setIsExporting(true);
-    setExportError(null);
-    try {
-      const vaultKey = getVaultKey();
-
-      // 1. Fetch all encrypted items from server
-      const res = await fetch('/api/vault/export', { credentials: 'include' });
-      if (!res.ok) throw new Error('Failed to fetch vault items');
-      const { data } = await res.json();
-      const encryptedItems: EncryptedVaultItem[] = data.items;
-
-      // 2. Decrypt all items client-side
-      const decryptedItems: DecryptedVaultItem[] = encryptedItems.map((item) =>
-        decryptVaultItem(vaultKey, item),
-      );
-
-      // 3. Re-package with a fresh export key
-      const exportPackage: VaultExportPackage = createExportPackage(vaultKey, decryptedItems);
-
-      // 4. Trigger download
-      const blob = new Blob([JSON.stringify(exportPackage, null, 2)], { type: 'application/json' });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href     = url;
-      a.download = `aegisvault-backup-${new Date().toISOString().slice(0, 10)}.aegisvault`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setExportError(err instanceof Error ? err.message : 'Export failed');
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  // ── Import ────────────────────────────────────────────────────────────────
-
-  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setIsImporting(true);
-    setImportError(null);
-    setImportSuccess(null);
-
-    try {
-      const vaultKey = getVaultKey();
-
-      // 1. Read the file
-      const text = await file.text();
-      const pkg: VaultExportPackage = JSON.parse(text);
-
-      // 2. Decrypt the export package client-side
-      const decryptedItems = decryptExportPackage(vaultKey, pkg);
-
-      // 3. Re-encrypt each item with the current vault key (fresh DEK per item)
-      const reEncryptedItems = decryptedItems.map((item) => {
-        const encrypted = encryptVaultItem(
-          vaultKey,
-          item.itemType,
-          item.isFavorite,
-          item.isHighRisk,
-          item.data,
-        );
-        return {
-          ...encrypted,
-          isArchived: item.isArchived,
-        };
-      });
-
-      // 4. Send to import API
-      const res = await fetch('/api/vault/import', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ items: reEncryptedItems }),
-        credentials: 'include',
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error ?? 'Import failed');
-      }
-
-      const { data } = await res.json();
-      setImportSuccess(`Successfully imported ${data.imported} item${data.imported !== 1 ? 's' : ''}.`);
-    } catch (err) {
-      setImportError(err instanceof Error ? err.message : 'Import failed. The file may be corrupted or from a different vault.');
-    } finally {
-      setIsImporting(false);
-      // Reset the file input so the same file can be re-selected if needed
-      if (importFileRef.current) importFileRef.current.value = '';
     }
   };
 
@@ -295,10 +341,9 @@ export default function SettingsPage() {
       setTelegramLinkCode(json.data.linkCode);
       setTelegramStep('linking');
 
-      // Start polling for link completion
       telegramPollingRef.current = setInterval(async () => {
         try {
-          const statusRes = await fetch('/api/auth/mfa/telegram/status', { credentials: 'include' });
+          const statusRes  = await fetch('/api/auth/mfa/telegram/status', { credentials: 'include' });
           const statusJson = await statusRes.json();
           if (statusJson.data?.linked) {
             if (telegramPollingRef.current) {
@@ -307,7 +352,7 @@ export default function SettingsPage() {
             }
             setTelegramEnabled(true);
             setTelegramStep('linked');
-            setTelegramSuccess('Telegram MFA enabled successfully');
+            setTelegramSuccess('Telegram recovery enabled successfully');
             setTimeout(() => setTelegramSuccess(null), 3000);
           }
         } catch {
@@ -347,104 +392,114 @@ export default function SettingsPage() {
         credentials: 'include',
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? 'Failed to disable Telegram MFA');
+      if (!res.ok) throw new Error(json.error ?? 'Failed to disable Telegram');
       setTelegramEnabled(false);
       setTelegramStep('idle');
       setShowTelegramDisableForm(false);
       setTelegramDisableCode('');
-      setTelegramSuccess('Telegram MFA disabled');
+      setTelegramSuccess('Telegram recovery disabled');
       setTimeout(() => setTelegramSuccess(null), 3000);
     } catch (err) {
-      setTelegramError(err instanceof Error ? err.message : 'Failed to disable Telegram MFA');
+      setTelegramError(err instanceof Error ? err.message : 'Failed to disable Telegram');
     } finally {
       setIsDisablingTelegram(false);
     }
   };
 
-  // Clean up polling interval on unmount
   useEffect(() => {
     return () => {
-      if (telegramPollingRef.current) {
-        clearInterval(telegramPollingRef.current);
-      }
+      if (telegramPollingRef.current) clearInterval(telegramPollingRef.current);
     };
   }, []);
 
-  // ── Email MFA ─────────────────────────────────────────────────────────────
+  // ── WhatsApp MFA ──────────────────────────────────────────────────────────
 
-  const enableEmailMfa = async () => {
-    setEmailMfaError(null);
-    setIsEnablingEmail(true);
+  const sendWhatsappCode = async () => {
+    setWhatsappError(null);
+    if (!whatsappPhone.trim()) {
+      setWhatsappError('Please enter your phone number');
+      return;
+    }
+    setIsWhatsappLoading(true);
     try {
-      const res = await fetch('/api/auth/mfa/email/setup', {
-        method: 'POST',
+      const res = await fetch('/api/auth/mfa/whatsapp/setup', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ phone: whatsappPhone.trim() }),
         credentials: 'include',
       });
       const json = await res.json();
+      if (res.status === 503) {
+        throw new Error('WhatsApp is not configured on this server');
+      }
       if (!res.ok) throw new Error(json.error ?? 'Failed to send verification code');
-      setEmailMfaStep('verify');
+      setWhatsappStep('verify');
     } catch (err) {
-      setEmailMfaError(err instanceof Error ? err.message : 'Failed to send verification code');
+      setWhatsappError(err instanceof Error ? err.message : 'Failed to send verification code');
     } finally {
-      setIsEnablingEmail(false);
+      setIsWhatsappLoading(false);
     }
   };
 
-  const verifyEmailMfa = async () => {
-    setEmailMfaError(null);
-    if (!emailMfaCode.trim()) {
-      setEmailMfaError('Please enter the 6-digit code');
+  const verifyWhatsappCode = async () => {
+    setWhatsappError(null);
+    if (!whatsappVerifyCode.trim()) {
+      setWhatsappError('Please enter the 6-digit verification code');
       return;
     }
-    setIsVerifyingEmail(true);
+    setIsWhatsappLoading(true);
     try {
-      const res = await fetch('/api/auth/mfa/email/verify', {
-        method: 'POST',
+      const res = await fetch('/api/auth/mfa/whatsapp/verify', {
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: emailMfaCode.trim() }),
+        body:    JSON.stringify({ code: whatsappVerifyCode.trim() }),
         credentials: 'include',
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Verification failed');
-      setEmailMfaEnabled(true);
-      setEmailMfaStep('idle');
-      setEmailMfaCode('');
-      setEmailMfaSuccess('Email MFA enabled successfully');
-      setTimeout(() => setEmailMfaSuccess(null), 3000);
+      setWhatsappEnabled(true);
+      setWhatsappStep('idle');
+      setWhatsappVerifyCode('');
+      if (json.data?.maskedPhone) setWhatsappMaskedPhone(json.data.maskedPhone);
+      setWhatsappSuccess('WhatsApp recovery enabled successfully');
+      setTimeout(() => setWhatsappSuccess(null), 3000);
     } catch (err) {
-      setEmailMfaError(err instanceof Error ? err.message : 'Verification failed');
+      setWhatsappError(err instanceof Error ? err.message : 'Verification failed');
     } finally {
-      setIsVerifyingEmail(false);
+      setIsWhatsappLoading(false);
     }
   };
 
-  const disableEmailMfa = async () => {
-    setEmailMfaError(null);
-    if (!emailDisableCode.trim()) {
-      setEmailMfaError('Please enter your current email code or password to disable');
+  const disableWhatsapp = async () => {
+    setWhatsappError(null);
+    if (!whatsappDisableCode.trim()) {
+      setWhatsappError('Please enter your current WhatsApp code or password to disable');
       return;
     }
-    setIsDisablingEmail(true);
+    setIsWhatsappLoading(true);
     try {
-      const res = await fetch('/api/auth/mfa/email/setup', {
-        method: 'DELETE',
+      const res = await fetch('/api/auth/mfa/whatsapp/setup', {
+        method:  'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: emailDisableCode.trim() }),
+        body:    JSON.stringify({ code: whatsappDisableCode.trim() }),
         credentials: 'include',
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? 'Failed to disable Email MFA');
-      setEmailMfaEnabled(false);
-      setShowEmailDisableForm(false);
-      setEmailDisableCode('');
-      setEmailMfaSuccess('Email MFA disabled');
-      setTimeout(() => setEmailMfaSuccess(null), 3000);
+      if (!res.ok) throw new Error(json.error ?? 'Failed to disable WhatsApp');
+      setWhatsappEnabled(false);
+      setShowWhatsappDisableForm(false);
+      setWhatsappDisableCode('');
+      setWhatsappMaskedPhone(null);
+      setWhatsappSuccess('WhatsApp recovery disabled');
+      setTimeout(() => setWhatsappSuccess(null), 3000);
     } catch (err) {
-      setEmailMfaError(err instanceof Error ? err.message : 'Failed to disable Email MFA');
+      setWhatsappError(err instanceof Error ? err.message : 'Failed to disable WhatsApp');
     } finally {
-      setIsDisablingEmail(false);
+      setIsWhatsappLoading(false);
     }
   };
+
+  // ── Timeout options ───────────────────────────────────────────────────────
 
   const timeoutOptions = [
     { label: '1 minute',   value: 60 },
@@ -455,6 +510,14 @@ export default function SettingsPage() {
     { label: 'Never',      value: 0 },
   ];
 
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="w-5 h-5 animate-spin text-aegis-muted" />
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-2xl space-y-6">
       <div>
@@ -462,7 +525,7 @@ export default function SettingsPage() {
         <p className="text-sm text-aegis-muted">Vault and security preferences</p>
       </div>
 
-      {/* Vault lock settings */}
+      {/* ── Auto-Lock ──────────────────────────────────────────────────────── */}
       <section className="aegis-card space-y-4">
         <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
           <Clock className="w-4 h-4 text-aegis-muted" /> Auto-Lock
@@ -482,7 +545,7 @@ export default function SettingsPage() {
           </select>
           {lockTimeout === 0 && (
             <p className="text-xs text-aegis-warning mt-1.5">
-              ⚠️ Disabling auto-lock reduces security. Not recommended.
+              Disabling auto-lock reduces security. Not recommended.
             </p>
           )}
         </div>
@@ -491,288 +554,75 @@ export default function SettingsPage() {
         </button>
       </section>
 
-      {/* MFA */}
+      {/* ── Backup Codes ───────────────────────────────────────────────────── */}
       <section className="aegis-card space-y-4">
         <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
-          <Shield className="w-4 h-4 text-aegis-muted" /> Two-Factor Authentication
-        </h2>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-aegis-subtle">Authenticator App (TOTP)</p>
-            <p className="text-xs text-aegis-muted mt-0.5">
-              {mfaEnabled ? 'MFA is enabled on your account' : 'Add an extra layer of login security'}
-            </p>
-          </div>
-          <div className={`text-xs px-2 py-1 rounded-full border ${mfaEnabled ? 'bg-aegis-success-muted border-aegis-success text-aegis-success' : 'bg-aegis-elevated border-aegis-border text-aegis-muted'}`}>
-            {mfaEnabled ? 'Enabled' : 'Disabled'}
-          </div>
-        </div>
-        {mfaEnabled ? (
-          <button className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted">
-            Disable MFA
-          </button>
-        ) : (
-          <a href="/api/auth/mfa/setup" className="aegis-btn-primary inline-flex items-center gap-2 text-sm">
-            <Key className="w-4 h-4" /> Enable MFA
-          </a>
-        )}
-      </section>
-
-      {/* Telegram MFA */}
-      <section className="aegis-card space-y-4">
-        <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
-          <Send className="w-4 h-4 text-aegis-muted" /> Telegram Two-Factor Authentication
-        </h2>
-
-        {telegramError && (
-          <div className="flex items-center gap-2 text-xs text-aegis-danger bg-aegis-danger-muted border border-aegis-danger/30 rounded-lg px-3 py-2">
-            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" /> {telegramError}
-          </div>
-        )}
-        {telegramSuccess && (
-          <div className="flex items-center gap-2 text-xs text-aegis-success bg-aegis-success-muted border border-aegis-success/30 rounded-lg px-3 py-2">
-            <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" /> {telegramSuccess}
-          </div>
-        )}
-
-        {telegramEnabled ? (
-          <>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-aegis-subtle">Telegram MFA: Enabled</p>
-                <p className="text-xs text-aegis-muted mt-0.5">
-                  Login codes will be delivered to your Telegram
-                </p>
-              </div>
-              <div className="text-xs px-2 py-1 rounded-full border bg-aegis-success-muted border-aegis-success text-aegis-success">
-                Enabled
-              </div>
-            </div>
-
-            {showTelegramDisableForm ? (
-              <div className="space-y-2">
-                <p className="text-xs text-aegis-muted">
-                  Enter your current Telegram code or account password to disable Telegram MFA:
-                </p>
-                <input
-                  type="text"
-                  value={telegramDisableCode}
-                  onChange={(e) => setTelegramDisableCode(e.target.value)}
-                  placeholder="Code or password"
-                  maxLength={128}
-                  className="aegis-input text-sm w-full max-w-xs"
-                />
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={disableTelegram}
-                    disabled={isDisablingTelegram}
-                    className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted flex items-center gap-2"
-                  >
-                    {isDisablingTelegram ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                    Confirm Disable
-                  </button>
-                  <button
-                    onClick={() => { setShowTelegramDisableForm(false); setTelegramDisableCode(''); setTelegramError(null); }}
-                    className="text-xs text-aegis-muted hover:text-aegis-text"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={() => setShowTelegramDisableForm(true)}
-                className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted"
-              >
-                Disable Telegram MFA
-              </button>
-            )}
-          </>
-        ) : telegramStep === 'linking' && telegramDeepLink ? (
-          <div className="space-y-3">
-            <p className="text-sm text-aegis-subtle">
-              Complete the setup in Telegram:
-            </p>
-            <ol className="space-y-2 text-sm text-aegis-muted list-decimal list-inside">
-              <li>Tap the button below to open Telegram:</li>
-            </ol>
-            <a
-              href={telegramDeepLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="aegis-btn-primary text-sm inline-flex items-center gap-2"
-            >
-              <Send className="w-4 h-4" /> Open in Telegram
-            </a>
-            <p className="text-xs text-aegis-muted">2. Send the message and return here.</p>
-            <div className="flex items-center gap-2 text-xs text-aegis-muted">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              <span>Checking for confirmation…</span>
-            </div>
-            {telegramLinkCode && (
-              <p className="text-xs text-aegis-muted">
-                Or copy the link code:{' '}
-                <code className="font-mono bg-aegis-elevated px-1 py-0.5 rounded text-aegis-subtle">
-                  {telegramLinkCode}
-                </code>
-              </p>
-            )}
-            <button
-              onClick={cancelTelegramLink}
-              className="text-xs text-aegis-muted hover:text-aegis-text"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div>
-              <p className="text-sm text-aegis-subtle">Enable via Telegram</p>
-              <p className="text-xs text-aegis-muted mt-0.5">
-                Receive login codes via Telegram — free, instant, no phone number needed.
-              </p>
-            </div>
-            <button
-              onClick={startTelegramLink}
-              disabled={isRequestingLink}
-              className="aegis-btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
-            >
-              {isRequestingLink
-                ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating link…</>
-                : <><Send className="w-4 h-4" /> Enable via Telegram</>}
-            </button>
-          </div>
-        )}
-      </section>
-
-      {/* Email MFA */}
-      <section className="aegis-card space-y-4">
-        <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
-          <Mail className="w-4 h-4 text-aegis-muted" /> Email Two-Factor Authentication
-        </h2>
-
-        {emailMfaError && (
-          <div className="flex items-center gap-2 text-xs text-aegis-danger bg-aegis-danger-muted border border-aegis-danger/30 rounded-lg px-3 py-2">
-            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" /> {emailMfaError}
-          </div>
-        )}
-        {emailMfaSuccess && (
-          <div className="flex items-center gap-2 text-xs text-aegis-success bg-aegis-success-muted border border-aegis-success/30 rounded-lg px-3 py-2">
-            <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" /> {emailMfaSuccess}
-          </div>
-        )}
-
-        {emailMfaEnabled ? (
-          <>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-aegis-subtle">Email MFA: Enabled</p>
-                <p className="text-xs text-aegis-muted mt-0.5">
-                  A one-time code is sent to your account email during login
-                </p>
-              </div>
-              <div className="text-xs px-2 py-1 rounded-full border bg-aegis-success-muted border-aegis-success text-aegis-success">
-                Enabled
-              </div>
-            </div>
-
-            {showEmailDisableForm ? (
-              <div className="space-y-2">
-                <p className="text-xs text-aegis-muted">
-                  Enter your current email code or account password to disable Email MFA:
-                </p>
-                <input
-                  type="text"
-                  value={emailDisableCode}
-                  onChange={(e) => setEmailDisableCode(e.target.value)}
-                  placeholder="Code or password"
-                  maxLength={128}
-                  className="aegis-input text-sm w-full max-w-xs"
-                />
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={disableEmailMfa}
-                    disabled={isDisablingEmail}
-                    className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted flex items-center gap-2"
-                  >
-                    {isDisablingEmail ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                    Confirm Disable
-                  </button>
-                  <button
-                    onClick={() => { setShowEmailDisableForm(false); setEmailDisableCode(''); setEmailMfaError(null); }}
-                    className="text-xs text-aegis-muted hover:text-aegis-text"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={() => setShowEmailDisableForm(true)}
-                className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted"
-              >
-                Disable Email MFA
-              </button>
-            )}
-          </>
-        ) : emailMfaStep === 'verify' ? (
-          <div className="space-y-3">
-            <p className="text-sm text-aegis-subtle">
-              A 6-digit code was sent to your account email. Enter it below to activate Email MFA.
-            </p>
-            <input
-              type="text"
-              value={emailMfaCode}
-              onChange={(e) => setEmailMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder="123456"
-              maxLength={6}
-              className="aegis-input text-sm w-40 tracking-widest text-center"
-            />
-            <div className="flex items-center gap-2">
-              <button
-                onClick={verifyEmailMfa}
-                disabled={isVerifyingEmail || emailMfaCode.length !== 6}
-                className="aegis-btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
-              >
-                {isVerifyingEmail ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                Verify
-              </button>
-              <button
-                onClick={() => { setEmailMfaStep('idle'); setEmailMfaCode(''); setEmailMfaError(null); }}
-                className="text-xs text-aegis-muted hover:text-aegis-text"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div>
-              <p className="text-sm text-aegis-subtle">Enable Email MFA</p>
-              <p className="text-xs text-aegis-muted mt-0.5">
-                Receive a one-time code at your account email during login
-              </p>
-            </div>
-            <button
-              onClick={enableEmailMfa}
-              disabled={isEnablingEmail}
-              className="aegis-btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
-            >
-              {isEnablingEmail
-                ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending code…</>
-                : <><Mail className="w-4 h-4" /> Enable Email MFA</>}
-            </button>
-          </div>
-        )}
-      </section>
-
-      {/* Passkeys */}
-      <section className="aegis-card space-y-4">
-        <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
-          <Fingerprint className="w-4 h-4 text-aegis-muted" /> Passkeys
+          <Shield className="w-4 h-4 text-aegis-muted" /> Backup Codes
         </h2>
         <p className="text-sm text-aegis-subtle">
-          Sign in with your device biometrics or hardware security key — no password required.
+          Keep these safe. Use one to regain access if you can&apos;t use your passkey.
+        </p>
+
+        {backupCodesRemaining !== null && (
+          <p className="text-sm text-aegis-muted">
+            {backupCodesRemaining === 0
+              ? <span className="text-aegis-warning font-medium">All used — regenerate now</span>
+              : <><span className="text-aegis-text font-medium">{backupCodesRemaining}</span> of 8 codes remaining</>}
+          </p>
+        )}
+
+        {newBackupCodes ? (
+          <div className="bg-aegis-elevated border border-aegis-border rounded-lg p-4 space-y-3">
+            <div className="grid grid-cols-2 gap-1.5">
+              {newBackupCodes.map((code) => (
+                <code key={code} className="font-mono text-xs text-aegis-text bg-aegis-surface px-2 py-1 rounded border border-aegis-border tracking-wider">
+                  {code}
+                </code>
+              ))}
+            </div>
+            <div className="flex items-start gap-2 text-xs text-aegis-warning">
+              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <span>Save these now — they will not be shown again</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={copyBackupCodes}
+                className="aegis-btn-secondary text-sm flex items-center gap-2"
+              >
+                <Copy className="w-4 h-4" /> Copy all
+              </button>
+              <button
+                type="button"
+                onClick={() => setNewBackupCodes(null)}
+                className="aegis-btn-primary text-sm"
+              >
+                I&apos;ve saved my codes
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={generateBackupCodes}
+            disabled={isGeneratingCodes}
+            className="aegis-btn-secondary text-sm flex items-center gap-2 disabled:opacity-50"
+          >
+            {isGeneratingCodes
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating…</>
+              : <><Key className="w-4 h-4" /> Generate New Codes</>}
+          </button>
+        )}
+      </section>
+
+      {/* ── Passkeys (Primary Authentication) ─────────────────────────────── */}
+      <section className="aegis-card space-y-4">
+        <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
+          <Fingerprint className="w-4 h-4 text-aegis-muted" /> Passkeys (Primary Authentication)
+        </h2>
+        <p className="text-sm text-aegis-subtle">
+          Add a passkey from this device or scan a QR code to register from your phone. Passkeys
+          replace the need for codes — they&apos;re faster and more secure.
         </p>
 
         {/* Cross-device info banner */}
@@ -885,7 +735,266 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* Backup & Export */}
+      {/* ── Telegram (Optional Recovery) ──────────────────────────────────── */}
+      <section className="aegis-card space-y-4">
+        <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
+          <Send className="w-4 h-4 text-aegis-muted" /> Telegram (Optional Recovery)
+        </h2>
+        <p className="text-xs text-aegis-muted">
+          Only appears as a recovery option during login if enabled.
+        </p>
+
+        {telegramError && (
+          <div className="flex items-center gap-2 text-xs text-aegis-danger bg-aegis-danger-muted border border-aegis-danger/30 rounded-lg px-3 py-2">
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" /> {telegramError}
+          </div>
+        )}
+        {telegramSuccess && (
+          <div className="flex items-center gap-2 text-xs text-aegis-success bg-aegis-success-muted border border-aegis-success/30 rounded-lg px-3 py-2">
+            <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" /> {telegramSuccess}
+          </div>
+        )}
+
+        {telegramEnabled ? (
+          <>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-aegis-subtle">Telegram Recovery: Enabled</p>
+                <p className="text-xs text-aegis-muted mt-0.5">
+                  Recovery codes will be delivered to your Telegram
+                </p>
+              </div>
+              <div className="text-xs px-2 py-1 rounded-full border bg-aegis-success-muted border-aegis-success text-aegis-success">
+                Enabled
+              </div>
+            </div>
+
+            {showTelegramDisableForm ? (
+              <div className="space-y-2">
+                <p className="text-xs text-aegis-muted">
+                  Enter your current Telegram code or account password to disable:
+                </p>
+                <input
+                  type="text"
+                  value={telegramDisableCode}
+                  onChange={(e) => setTelegramDisableCode(e.target.value)}
+                  placeholder="Code or password"
+                  maxLength={128}
+                  className="aegis-input text-sm w-full max-w-xs"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={disableTelegram}
+                    disabled={isDisablingTelegram}
+                    className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted flex items-center gap-2"
+                  >
+                    {isDisablingTelegram ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    Confirm Disable
+                  </button>
+                  <button
+                    onClick={() => { setShowTelegramDisableForm(false); setTelegramDisableCode(''); setTelegramError(null); }}
+                    className="text-xs text-aegis-muted hover:text-aegis-text"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowTelegramDisableForm(true)}
+                className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted"
+              >
+                Disable Telegram Recovery
+              </button>
+            )}
+          </>
+        ) : telegramStep === 'linking' && telegramDeepLink ? (
+          <div className="space-y-3">
+            <p className="text-sm text-aegis-subtle">Complete the setup in Telegram:</p>
+            <ol className="space-y-2 text-sm text-aegis-muted list-decimal list-inside">
+              <li>Tap the button below to open Telegram:</li>
+            </ol>
+            <a
+              href={telegramDeepLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="aegis-btn-primary text-sm inline-flex items-center gap-2"
+            >
+              <Send className="w-4 h-4" /> Open in Telegram
+            </a>
+            <p className="text-xs text-aegis-muted">2. Send the message and return here.</p>
+            <div className="flex items-center gap-2 text-xs text-aegis-muted">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>Checking for confirmation…</span>
+            </div>
+            {telegramLinkCode && (
+              <p className="text-xs text-aegis-muted">
+                Or copy the link code:{' '}
+                <code className="font-mono bg-aegis-elevated px-1 py-0.5 rounded text-aegis-subtle">
+                  {telegramLinkCode}
+                </code>
+              </p>
+            )}
+            <button onClick={cancelTelegramLink} className="text-xs text-aegis-muted hover:text-aegis-text">
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm text-aegis-subtle">Enable via Telegram</p>
+              <p className="text-xs text-aegis-muted mt-0.5">
+                Receive recovery codes via Telegram — free, instant, no phone number needed.
+              </p>
+            </div>
+            <button
+              onClick={startTelegramLink}
+              disabled={isRequestingLink}
+              className="aegis-btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
+            >
+              {isRequestingLink
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating link…</>
+                : <><Send className="w-4 h-4" /> Enable via Telegram</>}
+            </button>
+          </div>
+        )}
+      </section>
+
+      {/* ── WhatsApp (Optional Recovery) ──────────────────────────────────── */}
+      <section className="aegis-card space-y-4">
+        <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
+          <Phone className="w-4 h-4 text-aegis-muted" /> WhatsApp (Optional Recovery)
+        </h2>
+        <p className="text-xs text-aegis-muted">
+          Only appears as a recovery option during login if enabled.
+        </p>
+
+        {whatsappError && (
+          <div className="flex items-center gap-2 text-xs text-aegis-danger bg-aegis-danger-muted border border-aegis-danger/30 rounded-lg px-3 py-2">
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" /> {whatsappError}
+          </div>
+        )}
+        {whatsappSuccess && (
+          <div className="flex items-center gap-2 text-xs text-aegis-success bg-aegis-success-muted border border-aegis-success/30 rounded-lg px-3 py-2">
+            <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" /> {whatsappSuccess}
+          </div>
+        )}
+
+        {whatsappEnabled ? (
+          <>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-aegis-subtle">WhatsApp Recovery: Enabled</p>
+                {whatsappMaskedPhone && (
+                  <p className="text-xs text-aegis-muted mt-0.5">Phone: {whatsappMaskedPhone}</p>
+                )}
+              </div>
+              <div className="text-xs px-2 py-1 rounded-full border bg-aegis-success-muted border-aegis-success text-aegis-success">
+                Enabled
+              </div>
+            </div>
+
+            {showWhatsappDisableForm ? (
+              <div className="space-y-2">
+                <p className="text-xs text-aegis-muted">
+                  Enter your current WhatsApp code or account password to disable:
+                </p>
+                <input
+                  type="text"
+                  value={whatsappDisableCode}
+                  onChange={(e) => setWhatsappDisableCode(e.target.value)}
+                  placeholder="Code or password"
+                  maxLength={128}
+                  className="aegis-input text-sm w-full max-w-xs"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={disableWhatsapp}
+                    disabled={isWhatsappLoading}
+                    className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted flex items-center gap-2"
+                  >
+                    {isWhatsappLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    Confirm Disable
+                  </button>
+                  <button
+                    onClick={() => { setShowWhatsappDisableForm(false); setWhatsappDisableCode(''); setWhatsappError(null); }}
+                    className="text-xs text-aegis-muted hover:text-aegis-text"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowWhatsappDisableForm(true)}
+                className="aegis-btn-ghost text-sm text-aegis-danger hover:bg-aegis-danger-muted"
+              >
+                Disable WhatsApp Recovery
+              </button>
+            )}
+          </>
+        ) : whatsappStep === 'verify' ? (
+          <div className="space-y-3">
+            <p className="text-sm text-aegis-subtle">
+              A 6-digit code was sent to your WhatsApp. Enter it below to activate.
+            </p>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={whatsappVerifyCode}
+              onChange={(e) => setWhatsappVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="000000"
+              maxLength={6}
+              className="aegis-input text-sm w-40 tracking-widest text-center"
+            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={verifyWhatsappCode}
+                disabled={isWhatsappLoading || whatsappVerifyCode.length !== 6}
+                className="aegis-btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
+              >
+                {isWhatsappLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Verify
+              </button>
+              <button
+                onClick={() => { setWhatsappStep('idle'); setWhatsappVerifyCode(''); setWhatsappError(null); }}
+                className="text-xs text-aegis-muted hover:text-aegis-text"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm text-aegis-subtle">Enable via WhatsApp</p>
+              <p className="text-xs text-aegis-muted mt-0.5">
+                Receive recovery codes via WhatsApp — uses Meta&apos;s free Cloud API.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <input
+                type="tel"
+                value={whatsappPhone}
+                onChange={(e) => setWhatsappPhone(e.target.value)}
+                placeholder="+1 602 555 1234"
+                className="aegis-input text-sm w-full max-w-xs"
+              />
+              <button
+                onClick={sendWhatsappCode}
+                disabled={isWhatsappLoading || !whatsappPhone.trim()}
+                className="aegis-btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
+              >
+                {isWhatsappLoading
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending code…</>
+                  : <><Phone className="w-4 h-4" /> Send Verification Code</>}
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ── Backup & Export ────────────────────────────────────────────────── */}
       <section className="aegis-card space-y-4">
         <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
           <Download className="w-4 h-4 text-aegis-muted" /> Backup & Export
@@ -917,14 +1026,15 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* Import */}
+      {/* ── Import ────────────────────────────────────────────────────────── */}
       <section className="aegis-card space-y-4">
         <h2 className="text-sm font-semibold text-aegis-text flex items-center gap-2">
           <Upload className="w-4 h-4 text-aegis-muted" /> Import
         </h2>
         <p className="text-sm text-aegis-subtle">
-          Import a <code className="text-xs font-mono bg-aegis-elevated px-1 py-0.5 rounded">.aegisvault</code> backup
-          file. Items are decrypted and re-encrypted with your current vault key before storage.
+          Import a{' '}
+          <code className="text-xs font-mono bg-aegis-elevated px-1 py-0.5 rounded">.aegisvault</code>{' '}
+          backup file. Items are decrypted and re-encrypted with your current vault key before storage.
         </p>
 
         {importError && (
@@ -963,7 +1073,7 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* Danger zone */}
+      {/* ── Danger Zone ────────────────────────────────────────────────────── */}
       <section className="aegis-card border-aegis-danger/30 space-y-4">
         <h2 className="text-sm font-semibold text-aegis-danger flex items-center gap-2">
           <Trash2 className="w-4 h-4" /> Danger Zone

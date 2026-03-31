@@ -5,13 +5,14 @@
  * Verifies the authenticator response, updates the credential counter,
  * creates a session, and sets auth cookies.
  *
- * Body: { response: AuthenticationResponseJSON }
+ * Body: { response: AuthenticationResponseJSON, preAuthToken: string }
  * Response: user info (tokens are in httpOnly cookies)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuthenticationResponse } from '@simplewebauthn/server';
 import type { AuthenticationResponseJSON, AuthenticatorTransportFuture } from '@simplewebauthn/server';
+import { jwtVerify } from 'jose';
 import { z } from 'zod';
 import { db } from '@/lib/server/db';
 import { logAuditEvent } from '@/lib/server/audit';
@@ -21,8 +22,19 @@ import { createSessionAndSetCookies } from '@/lib/server/session';
 const RP_ID  = process.env.APP_DOMAIN ?? 'localhost';
 const ORIGIN = process.env.APP_ORIGIN ?? `https://${RP_ID}`;
 
+function loadJwtSecret(): Uint8Array {
+  const secret = process.env.JWT_ACCESS_SECRET;
+  if (!secret) {
+    throw new Error('JWT_ACCESS_SECRET environment variable is not set. Refusing to start.');
+  }
+  return new TextEncoder().encode(secret);
+}
+
+const ACCESS_SECRET = loadJwtSecret();
+
 const BodySchema = z.object({
-  response: z.record(z.unknown()),
+  response:      z.object({}).passthrough(),
+  preAuthToken:  z.string().min(1),
 });
 
 export async function POST(req: NextRequest) {
@@ -43,13 +55,41 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Validation failed' }, { status: 400 });
   }
 
-  const { response } = parsed.data;
+  const { response, preAuthToken } = parsed.data;
   const authResponse = response as AuthenticationResponseJSON;
+
+  // ── Verify preAuthToken ────────────────────────────────────────────────────
+  let userId: string;
+
+  try {
+    const { payload } = await jwtVerify(preAuthToken, ACCESS_SECRET);
+
+    if (payload['purpose'] !== 'pre-auth') {
+      return NextResponse.json(
+        { success: false, error: 'Invalid pre-auth token' },
+        { status: 401 },
+      );
+    }
+
+    if (typeof payload.sub !== 'string' || !payload.sub) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid pre-auth token' },
+        { status: 401 },
+      );
+    }
+
+    userId = payload.sub;
+  } catch {
+    return NextResponse.json(
+      { success: false, error: 'Pre-auth token is invalid or has expired' },
+      { status: 401 },
+    );
+  }
 
   // ── Look up the credential ─────────────────────────────────────────────────
   const storedCredential = await db.webAuthnCredential.findUnique({
     where:   { credentialId: authResponse.id },
-    include: { user: { select: { id: true, email: true, lockTimeout: true, totpEnabled: true } } },
+    include: { user: { select: { id: true, email: true, lockTimeout: true } } },
   });
 
   if (!storedCredential) {
@@ -64,16 +104,26 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // ── Confirm credential belongs to the pre-auth user ───────────────────────
+  if (storedCredential.userId !== userId) {
+    await logAuditEvent('AUTH_WEBAUTHN_CHALLENGE_SUCCESS', {
+      ip,
+      userAgent,
+      userId,
+      metadata: { success: false, reason: 'credential_user_mismatch' },
+    });
+    return NextResponse.json(
+      { success: false, error: 'Passkey not recognized' },
+      { status: 401 },
+    );
+  }
+
   // ── Retrieve and consume the challenge ────────────────────────────────────
   const challenge = await db.webAuthnChallenge.findFirst({
     where: {
       type:      'authentication',
       expiresAt: { gt: new Date() },
-      // Accept challenges scoped to this user or discoverable (userId null)
-      OR: [
-        { userId: storedCredential.userId },
-        { userId: null },
-      ],
+      userId,
     },
     orderBy: { expiresAt: 'desc' },
   });
@@ -107,7 +157,7 @@ export async function POST(req: NextRequest) {
     await logAuditEvent('AUTH_WEBAUTHN_CHALLENGE_SUCCESS', {
       ip,
       userAgent,
-      userId: storedCredential.userId,
+      userId,
       metadata: { success: false, reason: 'verification_failed' },
     });
     return NextResponse.json(
@@ -159,7 +209,6 @@ export async function POST(req: NextRequest) {
       user: {
         id:          user.id,
         email:       user.email,
-        totpEnabled: user.totpEnabled,
         lockTimeout: user.lockTimeout,
       },
     },
